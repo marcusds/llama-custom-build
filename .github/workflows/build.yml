@@ -1,0 +1,172 @@
+name: Build llama.cpp (RTX 5000 / Zen 5)
+
+on:
+  # Run on a schedule to pick up upstream changes automatically
+  schedule:
+    - cron: '0 3 * * 0'   # Every Sunday at 03:00 UTC
+  # Allow manual trigger with optional ref override
+  workflow_dispatch:
+    inputs:
+      llama_ref:
+        description: 'llama.cpp git ref to build (branch, tag, or SHA). Leave empty for latest master.'
+        required: false
+        default: ''
+      upload_artifacts:
+        description: 'Upload build artifacts'
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  LLAMA_REPO: https://github.com/ggml-org/llama.cpp.git
+  BUILD_DIR: llama-src
+  ARTIFACT_NAME: llama-cpp-rtx5000-win-x64
+
+jobs:
+  build-windows-cuda:
+    name: Windows · CUDA · RTX 5000 (sm_120)
+    runs-on: windows-latest
+
+    steps:
+      # ── 1. Checkout this repo (for scripts / config only) ─────────────────
+      - name: Checkout build-pipeline repo
+        uses: actions/checkout@v6.0.2
+
+      # ── 2. Resolve upstream ref ───────────────────────────────────────────
+      - name: Resolve llama.cpp ref
+        id: resolve
+        shell: pwsh
+        run: |
+          $ref = "${{ github.event.inputs.llama_ref }}"
+          if ([string]::IsNullOrWhiteSpace($ref)) { $ref = "master" }
+          Write-Host "Building ref: $ref"
+          echo "ref=$ref" >> $env:GITHUB_OUTPUT
+
+      # ── 3. Clone upstream llama.cpp (no history, saves time) ─────────────
+      - name: Clone llama.cpp @ ${{ steps.resolve.outputs.ref }}
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch ${{ steps.resolve.outputs.ref }} `
+            ${{ env.LLAMA_REPO }} ${{ env.BUILD_DIR }}
+
+      - name: Record upstream commit
+        id: upstream
+        shell: pwsh
+        run: |
+          $sha = git -C ${{ env.BUILD_DIR }} rev-parse HEAD
+          $short = $sha.Substring(0,10)
+          Write-Host "Upstream SHA: $sha"
+          echo "sha=$sha" >> $env:GITHUB_OUTPUT
+          echo "short=$short" >> $env:GITHUB_OUTPUT
+
+      # ── 4. Install CUDA Toolkit ───────────────────────────────────────────
+      - name: Install CUDA Toolkit 13.2.0
+        uses: Jimver/cuda-toolkit@v0.2.35
+        id: cuda-toolkit
+        with:
+          cuda: '13.2.0'
+          method: 'network'
+
+      - name: Verify CUDA install
+        shell: pwsh
+        run: nvcc --version
+
+      - name: Use installed CUDA Toolkit
+        shell: pwsh
+        run: |
+          "CUDA_PATH=${{ steps.cuda-toolkit.outputs.CUDA_PATH }}" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "${{ steps.cuda-toolkit.outputs.CUDA_PATH }}\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      # ── 5. Configure CMake ────────────────────────────────────────────────
+      - name: Configure (CMake)
+        shell: pwsh
+        run: |
+          cmake -S ${{ env.BUILD_DIR }} -B build `
+            -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DGGML_CUDA=ON `
+            -DCMAKE_CUDA_ARCHITECTURES=120 `
+            -DGGML_AVX=ON `
+            -DGGML_AVX2=ON `
+            -DGGML_FMA=ON `
+            -DGGML_F16C=ON `
+            -DGGML_AVX_VNNI=ON `
+            -DGGML_AVX512=ON `
+            -DGGML_AVX512_VBMI=ON `
+            -DGGML_AVX512_VNNI=ON `
+            -DGGML_AVX512_BF16=ON `
+            -DGGML_NATIVE=OFF `
+            -DLLAMA_FLASH_ATTN=ON `
+            -DBUILD_SHARED_LIBS=ON `
+            -DCMAKE_CXX_FLAGS="/O2 /GL /Gw /Gy /Oi /Ot /GF /arch:AVX512" `
+            -DCMAKE_EXE_LINKER_FLAGS="/LTCG /OPT:REF /OPT:ICF /INCREMENTAL:NO"
+
+      # ── 6. Build ──────────────────────────────────────────────────────────
+      - name: Build (Release)
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --parallel 4
+
+      # ── 7. Collect artifacts ──────────────────────────────────────────────
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          $out = "artifacts\${{ env.ARTIFACT_NAME }}"
+          New-Item -ItemType Directory -Path $out -Force
+
+          # Binaries
+          Copy-Item build\bin\Release\*.exe $out -ErrorAction SilentlyContinue
+          Copy-Item build\bin\Release\*.dll $out -ErrorAction SilentlyContinue
+
+          # CUDA runtime DLLs (needed on machines without full CUDA install)
+          $cudaBin = "${{ steps.cuda-toolkit.outputs.CUDA_PATH }}\bin"
+          @("cudart64_*.dll","cublas64_*.dll","cublasLt64_*.dll") | ForEach-Object {
+            Copy-Item "$cudaBin\$_" $out -ErrorAction SilentlyContinue
+          }
+
+          # Build metadata
+          @{
+            upstream_repo   = "${{ env.LLAMA_REPO }}"
+            upstream_ref    = "${{ steps.resolve.outputs.ref }}"
+            upstream_sha    = "${{ steps.upstream.outputs.sha }}"
+            build_date      = (Get-Date -Format "yyyy-MM-dd HH:mm:ss UTC")
+            cuda_arch       = "sm_120 (RTX 5000 / Blackwell)"
+            cpu_flags       = "AVX2, FMA, F16C, AVX_VNNI, AVX512, AVX512_VBMI, AVX512_VNNI, AVX512_BF16"
+            flash_attention = "ON"
+          } | ConvertTo-Json | Set-Content "$out\build-info.json"
+
+          Write-Host "Artifact contents:"
+          Get-ChildItem $out | Format-Table Name, Length
+
+      # ── 8. Upload artifacts ───────────────────────────────────────────────
+      - name: Upload artifacts
+        if: ${{ github.event.inputs.upload_artifacts != 'false' }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: ${{ env.ARTIFACT_NAME }}-${{ steps.upstream.outputs.short }}
+          path: artifacts/
+          retention-days: 30
+
+      # ── 9. Create GitHub Release (scheduled builds only) ─────────────────
+      - name: Create Release
+        if: github.event_name == 'schedule'
+        uses: softprops/action-gh-release@v3.0.0
+        with:
+          tag_name: build-${{ steps.upstream.outputs.short }}
+          name: "Auto-build @ ${{ steps.upstream.outputs.short }}"
+          body: |
+            Automated build of [llama.cpp](${{ env.LLAMA_REPO }}) @ `${{ steps.upstream.outputs.sha }}`
+
+            **Target hardware:** RTX 5000 (sm_120) + Zen 3
+            **CUDA:** 13.x
+            **CPU flags:** AVX2, FMA, F16C, AVX_VNNI, AVX512, AVX512-VBMI, AVX512-VNNI, AVX512-BF16
+            **Flash Attention:** Enabled
+          files: artifacts/**/*
+          draft: false
+          prerelease: false
+

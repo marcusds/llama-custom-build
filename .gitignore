@@ -1,0 +1,15 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+
+# Build outputs (local builds only, not committed)
+build/
+artifacts/
+llama-src/
+
+# VS artifacts
+*.user
+*.suo
+.vs/
+
+/.idea/
