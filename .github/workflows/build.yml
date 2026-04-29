@@ -104,8 +104,10 @@ jobs:
             -DGGML_NATIVE=OFF `
             -DLLAMA_FLASH_ATTN=ON `
             -DBUILD_SHARED_LIBS=ON `
-            "-DCMAKE_CXX_FLAGS=-O2 -mavx512f -mavx512bw -mavx512vl -mavx512cd -mavx512vbmi -mavx512vnni -mavx512bf16 -mfma -mf16c -mavxvnni" `
-            -DCMAKE_EXE_LINKER_FLAGS="/OPT:REF /OPT:ICF /INCREMENTAL:NO"
+            "-DCMAKE_C_FLAGS=-O3 -march=znver5 -flto=thin -ffast-math" `
+            "-DCMAKE_CXX_FLAGS=-O3 -march=znver5 -flto=thin -ffast-math" `
+            "-DCMAKE_EXE_LINKER_FLAGS=-flto=thin /OPT:REF /OPT:ICF /INCREMENTAL:NO" `
+            "-DCMAKE_SHARED_LINKER_FLAGS=-flto=thin /OPT:REF /OPT:ICF"
 
       # ── 6. Build ──────────────────────────────────────────────────────────
       - name: Build (Release)
@@ -164,7 +166,7 @@ jobs:
           body: |
             Automated build of [llama.cpp](${{ env.LLAMA_REPO }}) @ `${{ steps.upstream.outputs.sha }}`
 
-            **Target hardware:** RTX 5000 (sm_120) + Zen 3
+            **Target hardware:** RTX 5000 (sm_120) + Zen 5
             **CUDA:** 13.x
             **CPU flags:** AVX2, FMA, F16C, AVX_VNNI, AVX512, AVX512-VBMI, AVX512-VNNI, AVX512-BF16
             **Flash Attention:** Enabled
