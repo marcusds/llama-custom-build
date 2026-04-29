@@ -3,7 +3,7 @@ name: Build llama.cpp (RTX 5000 / Zen 5)
 on:
   # Run on a schedule to pick up upstream changes automatically
   schedule:
-    - cron: '0 3 * * 0'   # Every Sunday at 03:00 UTC
+    - cron: '0 3 * * *'
   # Allow manual trigger with optional ref override
   workflow_dispatch:
     inputs:
@@ -87,10 +87,11 @@ jobs:
         shell: pwsh
         run: |
           cmake -S ${{ env.BUILD_DIR }} -B build `
-            -G "Visual Studio 17 2022" -A x64 `
+            -G "Visual Studio 17 2022" -A x64 -T ClangCL `
             -DCMAKE_BUILD_TYPE=Release `
             -DGGML_CUDA=ON `
             -DCMAKE_CUDA_ARCHITECTURES=120 `
+            -DCMAKE_CUDA_HOST_COMPILER=clang-cl `
             -DGGML_AVX=ON `
             -DGGML_AVX2=ON `
             -DGGML_FMA=ON `
@@ -103,8 +104,8 @@ jobs:
             -DGGML_NATIVE=OFF `
             -DLLAMA_FLASH_ATTN=ON `
             -DBUILD_SHARED_LIBS=ON `
-            -DCMAKE_CXX_FLAGS="/O2 /GL /Gw /Gy /Oi /Ot /GF /arch:AVX512" `
-            -DCMAKE_EXE_LINKER_FLAGS="/LTCG /OPT:REF /OPT:ICF /INCREMENTAL:NO"
+            "-DCMAKE_CXX_FLAGS=-O2 -mavx512f -mavx512bw -mavx512vl -mavx512cd -mavx512vbmi -mavx512vnni -mavx512bf16 -mfma -mf16c -mavxvnni" `
+            -DCMAKE_EXE_LINKER_FLAGS="/OPT:REF /OPT:ICF /INCREMENTAL:NO"
 
       # ── 6. Build ──────────────────────────────────────────────────────────
       - name: Build (Release)
@@ -136,6 +137,7 @@ jobs:
             upstream_sha    = "${{ steps.upstream.outputs.sha }}"
             build_date      = (Get-Date -Format "yyyy-MM-dd HH:mm:ss UTC")
             cuda_arch       = "sm_120 (RTX 5000 / Blackwell)"
+            compiler        = "ClangCL (VS 2022 toolset)"
             cpu_flags       = "AVX2, FMA, F16C, AVX_VNNI, AVX512, AVX512_VBMI, AVX512_VNNI, AVX512_BF16"
             flash_attention = "ON"
           } | ConvertTo-Json | Set-Content "$out\build-info.json"
