@@ -82,13 +82,21 @@ jobs:
           "CUDA_PATH=${{ steps.cuda-toolkit.outputs.CUDA_PATH }}" | Out-File -FilePath $env:GITHUB_ENV -Append
           "${{ steps.cuda-toolkit.outputs.CUDA_PATH }}\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
+      # ── 4b. Set up MSVC x64 dev environment (required for Ninja + clang-cl) ─
+      - name: Set up MSVC x64 environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       # ── 5. PGO pass 1 — instrumented build ───────────────────────────────
       - name: Configure (instrumented)
         shell: pwsh
         run: |
           cmake -S ${{ env.BUILD_DIR }} -B build-pgo `
-            -G "Visual Studio 17 2022" -A x64 -T ClangCL `
+            -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=clang-cl `
+            -DCMAKE_CXX_COMPILER=clang-cl `
             -DGGML_CUDA=ON `
             -DCMAKE_CUDA_ARCHITECTURES=120 `
             -DCMAKE_CUDA_HOST_COMPILER=clang-cl `
@@ -106,12 +114,12 @@ jobs:
             -DBUILD_SHARED_LIBS=ON `
             "-DCMAKE_C_FLAGS=-O2 -march=znver5 -fprofile-instr-generate -ffast-math" `
             "-DCMAKE_CXX_FLAGS=-O2 -march=znver5 -fprofile-instr-generate -ffast-math" `
-            "-DCMAKE_EXE_LINKER_FLAGS=-fprofile-instr-generate /OPT:REF /OPT:ICF /INCREMENTAL:NO" `
-            "-DCMAKE_SHARED_LINKER_FLAGS=-fprofile-instr-generate /OPT:REF /OPT:ICF"
+            "-DCMAKE_EXE_LINKER_FLAGS=-fprofile-instr-generate" `
+            "-DCMAKE_SHARED_LINKER_FLAGS=-fprofile-instr-generate"
 
       - name: Build (instrumented)
         shell: pwsh
-        run: cmake --build build-pgo --config Release --parallel 4
+        run: cmake --build build-pgo --parallel 4
 
       # ── 5b. Profile collection ────────────────────────────────────────────
       - name: Download profile model
@@ -126,7 +134,7 @@ jobs:
         shell: pwsh
         run: |
           $env:LLVM_PROFILE_FILE = "${{ github.workspace }}\profiles\%p.profraw"
-          $cli = "build-pgo\bin\Release\llama-cli.exe"
+          $cli = "build-pgo\bin\llama-cli.exe"
           & $cli -m profile-model.gguf -ngl 0 -t 4 -n 64  -p "Explain quantum computing briefly."
           & $cli -m profile-model.gguf -ngl 0 -t 4 -n 64  -p "Write a short poem about winter."
           & $cli -m profile-model.gguf -ngl 0 -t 4 -n 128 -p "What is machine learning? Give examples."
@@ -145,8 +153,10 @@ jobs:
         run: |
           $prof = ("${{ github.workspace }}/profiles/merged.profdata") -replace '\\', '/'
           cmake -S ${{ env.BUILD_DIR }} -B build `
-            -G "Visual Studio 17 2022" -A x64 -T ClangCL `
+            -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=clang-cl `
+            -DCMAKE_CXX_COMPILER=clang-cl `
             -DGGML_CUDA=ON `
             -DCMAKE_CUDA_ARCHITECTURES=120 `
             -DCMAKE_CUDA_HOST_COMPILER=clang-cl `
@@ -164,13 +174,13 @@ jobs:
             -DBUILD_SHARED_LIBS=ON `
             "-DCMAKE_C_FLAGS=-O3 -march=znver5 -fprofile-instr-use=$prof -fprofile-correction -flto=thin -ffast-math" `
             "-DCMAKE_CXX_FLAGS=-O3 -march=znver5 -fprofile-instr-use=$prof -fprofile-correction -flto=thin -ffast-math" `
-            "-DCMAKE_EXE_LINKER_FLAGS=-flto=thin /OPT:REF /OPT:ICF /INCREMENTAL:NO" `
-            "-DCMAKE_SHARED_LINKER_FLAGS=-flto=thin /OPT:REF /OPT:ICF"
+            "-DCMAKE_EXE_LINKER_FLAGS=-flto=thin" `
+            "-DCMAKE_SHARED_LINKER_FLAGS=-flto=thin"
 
       # ── 6. Build (optimized) ──────────────────────────────────────────────
       - name: Build (Release)
         shell: pwsh
-        run: cmake --build build --config Release --parallel 4
+        run: cmake --build build --parallel 4
 
       # ── 7. Collect artifacts ──────────────────────────────────────────────
       - name: Collect artifacts
@@ -179,9 +189,9 @@ jobs:
           $out = "artifacts\${{ env.ARTIFACT_NAME }}"
           New-Item -ItemType Directory -Path $out -Force
 
-          # Binaries
-          Copy-Item build\bin\Release\*.exe $out -ErrorAction SilentlyContinue
-          Copy-Item build\bin\Release\*.dll $out -ErrorAction SilentlyContinue
+          # Binaries (Ninja single-config: no Release subdir)
+          Copy-Item build\bin\*.exe $out -ErrorAction SilentlyContinue
+          Copy-Item build\bin\*.dll $out -ErrorAction SilentlyContinue
 
           # CUDA runtime DLLs (needed on machines without full CUDA install)
           $cudaBin = "${{ steps.cuda-toolkit.outputs.CUDA_PATH }}\bin"
