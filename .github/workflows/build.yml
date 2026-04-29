@@ -82,10 +82,68 @@ jobs:
           "CUDA_PATH=${{ steps.cuda-toolkit.outputs.CUDA_PATH }}" | Out-File -FilePath $env:GITHUB_ENV -Append
           "${{ steps.cuda-toolkit.outputs.CUDA_PATH }}\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
-      # ── 5. Configure CMake ────────────────────────────────────────────────
-      - name: Configure (CMake)
+      # ── 5. PGO pass 1 — instrumented build ───────────────────────────────
+      - name: Configure (instrumented)
         shell: pwsh
         run: |
+          cmake -S ${{ env.BUILD_DIR }} -B build-pgo `
+            -G "Visual Studio 17 2022" -A x64 -T ClangCL `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DGGML_CUDA=ON `
+            -DCMAKE_CUDA_ARCHITECTURES=120 `
+            -DCMAKE_CUDA_HOST_COMPILER=clang-cl `
+            -DGGML_AVX=ON `
+            -DGGML_AVX2=ON `
+            -DGGML_FMA=ON `
+            -DGGML_F16C=ON `
+            -DGGML_AVX_VNNI=ON `
+            -DGGML_AVX512=ON `
+            -DGGML_AVX512_VBMI=ON `
+            -DGGML_AVX512_VNNI=ON `
+            -DGGML_AVX512_BF16=ON `
+            -DGGML_NATIVE=OFF `
+            -DLLAMA_FLASH_ATTN=ON `
+            -DBUILD_SHARED_LIBS=ON `
+            "-DCMAKE_C_FLAGS=-O2 -march=znver5 -fprofile-instr-generate -ffast-math" `
+            "-DCMAKE_CXX_FLAGS=-O2 -march=znver5 -fprofile-instr-generate -ffast-math" `
+            "-DCMAKE_EXE_LINKER_FLAGS=-fprofile-instr-generate /OPT:REF /OPT:ICF /INCREMENTAL:NO" `
+            "-DCMAKE_SHARED_LINKER_FLAGS=-fprofile-instr-generate /OPT:REF /OPT:ICF"
+
+      - name: Build (instrumented)
+        shell: pwsh
+        run: cmake --build build-pgo --config Release --parallel 4
+
+      # ── 5b. Profile collection ────────────────────────────────────────────
+      - name: Download profile model
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path profiles -Force
+          Invoke-WebRequest `
+            -Uri "https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf" `
+            -OutFile profile-model.gguf -UseBasicParsing
+
+      - name: Run profiling workload
+        shell: pwsh
+        run: |
+          $env:LLVM_PROFILE_FILE = "${{ github.workspace }}\profiles\%p.profraw"
+          $cli = "build-pgo\bin\Release\llama-cli.exe"
+          & $cli -m profile-model.gguf -ngl 0 -t 4 -n 64  -p "Explain quantum computing briefly."
+          & $cli -m profile-model.gguf -ngl 0 -t 4 -n 64  -p "Write a short poem about winter."
+          & $cli -m profile-model.gguf -ngl 0 -t 4 -n 128 -p "What is machine learning? Give examples."
+
+      - name: Merge profiles
+        shell: pwsh
+        run: |
+          $vsPath = & 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe' `
+            -latest -products * -property installationPath
+          & "$vsPath\VC\Tools\Llvm\x64\bin\llvm-profdata.exe" `
+            merge -output=profiles\merged.profdata profiles\*.profraw
+
+      # ── 5c. PGO pass 2 — optimized build ─────────────────────────────────
+      - name: Configure (optimized)
+        shell: pwsh
+        run: |
+          $prof = ("${{ github.workspace }}/profiles/merged.profdata") -replace '\\', '/'
           cmake -S ${{ env.BUILD_DIR }} -B build `
             -G "Visual Studio 17 2022" -A x64 -T ClangCL `
             -DCMAKE_BUILD_TYPE=Release `
@@ -104,16 +162,15 @@ jobs:
             -DGGML_NATIVE=OFF `
             -DLLAMA_FLASH_ATTN=ON `
             -DBUILD_SHARED_LIBS=ON `
-            "-DCMAKE_C_FLAGS=-O3 -march=znver5 -flto=thin -ffast-math" `
-            "-DCMAKE_CXX_FLAGS=-O3 -march=znver5 -flto=thin -ffast-math" `
+            "-DCMAKE_C_FLAGS=-O3 -march=znver5 -fprofile-instr-use=$prof -fprofile-correction -flto=thin -ffast-math" `
+            "-DCMAKE_CXX_FLAGS=-O3 -march=znver5 -fprofile-instr-use=$prof -fprofile-correction -flto=thin -ffast-math" `
             "-DCMAKE_EXE_LINKER_FLAGS=-flto=thin /OPT:REF /OPT:ICF /INCREMENTAL:NO" `
             "-DCMAKE_SHARED_LINKER_FLAGS=-flto=thin /OPT:REF /OPT:ICF"
 
-      # ── 6. Build ──────────────────────────────────────────────────────────
+      # ── 6. Build (optimized) ──────────────────────────────────────────────
       - name: Build (Release)
         shell: pwsh
-        run: |
-          cmake --build build --config Release --parallel 4
+        run: cmake --build build --config Release --parallel 4
 
       # ── 7. Collect artifacts ──────────────────────────────────────────────
       - name: Collect artifacts
@@ -141,6 +198,7 @@ jobs:
             cuda_arch       = "sm_120 (RTX 5000 / Blackwell)"
             compiler        = "ClangCL (VS 2022 toolset)"
             cpu_flags       = "AVX2, FMA, F16C, AVX_VNNI, AVX512, AVX512_VBMI, AVX512_VNNI, AVX512_BF16"
+            pgo             = "ON (CPU paths, Qwen2.5-0.5B workload)"
             flash_attention = "ON"
           } | ConvertTo-Json | Set-Content "$out\build-info.json"
 
