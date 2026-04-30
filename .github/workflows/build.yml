@@ -66,21 +66,32 @@ jobs:
 
       # ── 4. Install CUDA Toolkit ───────────────────────────────────────────
       - name: Install CUDA Toolkit 13.2.0
+        if: ${{ !startsWith(runner.name, 'marcus') }}
         uses: Jimver/cuda-toolkit@v0.2.35
         id: cuda-toolkit
         with:
           cuda: '13.2.0'
           method: 'network'
 
+      - name: Detect existing CUDA (self-hosted)
+        if: ${{ startsWith(runner.name, 'marcus') }}
+        id: cuda-existing
+        shell: pwsh
+        run: |
+          $cudaPath = if ($env:CUDA_PATH) { $env:CUDA_PATH } else { "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2" }
+          Write-Host "CUDA_PATH=$cudaPath"
+          echo "CUDA_PATH=$cudaPath" >> $env:GITHUB_OUTPUT
+
       - name: Verify CUDA install
         shell: pwsh
         run: nvcc --version
 
-      - name: Use installed CUDA Toolkit
+      - name: Set CUDA env
         shell: pwsh
         run: |
-          "CUDA_PATH=${{ steps.cuda-toolkit.outputs.CUDA_PATH }}" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "${{ steps.cuda-toolkit.outputs.CUDA_PATH }}\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+          $cudaPath = "${{ steps.cuda-toolkit.outputs.CUDA_PATH || steps.cuda-existing.outputs.CUDA_PATH }}"
+          "CUDA_PATH=$cudaPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "$cudaPath\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
       # ── 4b. Set up MSVC x64 dev environment (required for Ninja + clang-cl) ─
       - name: Set up MSVC x64 environment
