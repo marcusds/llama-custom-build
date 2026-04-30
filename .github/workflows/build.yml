@@ -99,7 +99,7 @@ jobs:
             -DCMAKE_CXX_COMPILER=clang-cl `
             -DGGML_CUDA=ON `
             -DCMAKE_CUDA_ARCHITECTURES=120 `
-            -DCMAKE_CUDA_HOST_COMPILER=clang-cl `
+
             -DGGML_AVX=ON `
             -DGGML_AVX2=ON `
             -DGGML_FMA=ON `
@@ -159,7 +159,7 @@ jobs:
             -DCMAKE_CXX_COMPILER=clang-cl `
             -DGGML_CUDA=ON `
             -DCMAKE_CUDA_ARCHITECTURES=120 `
-            -DCMAKE_CUDA_HOST_COMPILER=clang-cl `
+
             -DGGML_AVX=ON `
             -DGGML_AVX2=ON `
             -DGGML_FMA=ON `
