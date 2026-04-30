@@ -3,10 +3,8 @@ name: Build llama.cpp (RTX 5000 / Zen 5)
 on:
   push:
     branches: [main]
-  # Run on a schedule to pick up upstream changes automatically
   schedule:
     - cron: '0 3 * * *'
-  # Allow manual trigger with optional ref override
   workflow_dispatch:
     inputs:
       llama_ref:
@@ -31,15 +29,13 @@ env:
 
 jobs:
   build-windows-cuda:
-    name: Windows · CUDA · RTX 5000 (sm_120)
+    name: Windows CUDA RTX 5000 (sm_120)
     runs-on: self-hosted
 
     steps:
-      # ── 1. Checkout this repo (for scripts / config only) ─────────────────
       - name: Checkout build-pipeline repo
         uses: actions/checkout@v6.0.2
 
-      # ── 2. Resolve upstream ref ───────────────────────────────────────────
       - name: Resolve llama.cpp ref
         id: resolve
         shell: pwsh
@@ -49,7 +45,6 @@ jobs:
           Write-Host "Building ref: $ref"
           echo "ref=$ref" >> $env:GITHUB_OUTPUT
 
-      # ── 3. Clone upstream llama.cpp (no history, saves time) ─────────────
       - name: Clone llama.cpp @ ${{ steps.resolve.outputs.ref }}
         shell: pwsh
         run: |
@@ -66,7 +61,6 @@ jobs:
           echo "sha=$sha" >> $env:GITHUB_OUTPUT
           echo "short=$short" >> $env:GITHUB_OUTPUT
 
-      # ── 4. Install CUDA Toolkit ───────────────────────────────────────────
       - name: Install CUDA Toolkit 13.2.0
         if: ${{ !startsWith(runner.name, 'marcus') }}
         uses: Jimver/cuda-toolkit@v0.2.35
@@ -95,46 +89,43 @@ jobs:
           "CUDA_PATH=$cudaPath" | Out-File -FilePath $env:GITHUB_ENV -Append
           "$cudaPath\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
-      # ── 4b. Set up MSVC x64 dev environment (required for Ninja + clang-cl) ─
       - name: Set up MSVC x64 environment
         uses: ilammy/msvc-dev-cmd@v1.13.0
         with:
           arch: x64
 
-      # ── 5. PGO pass 1 — instrumented build ───────────────────────────────
       - name: Configure (instrumented)
         shell: pwsh
-       run: |
-           cmake -S ${{ env.BUILD_DIR }} -B build-pgo `
-             -G Ninja `
-             -DCMAKE_BUILD_TYPE=Release `
-             -DCMAKE_C_COMPILER=clang-cl `
-             -DCMAKE_CXX_COMPILER=clang-cl `
-             -DCMAKE_CUDA_HOST_COMPILER=cl `
-             -DGGML_CUDA=ON `
-             -DCMAKE_CUDA_ARCHITECTURES=120 `
-             -DGGML_AVX=ON `
-             -DGGML_AVX2=ON `
-             -DGGML_FMA=ON `
-             -DGGML_F16C=ON `
-             -DGGML_AVX_VNNI=ON `
-             -DGGML_AVX512=ON `
-             -DGGML_AVX512_VBMI=ON `
-             -DGGML_AVX512_VNNI=ON `
-             -DGGML_AVX512_BF16=ON `
-             -DGGML_NATIVE=OFF `
-             -DLLAMA_FLASH_ATTN=ON `
-             -DBUILD_SHARED_LIBS=ON `
-             "-DCMAKE_C_FLAGS=-O2 -march=znver5 -fprofile-instr-generate -ffast-math" `
-             "-DCMAKE_CXX_FLAGS=-O2 -march=znver5 -fprofile-instr-generate -ffast-math" `
-             "-DCMAKE_EXE_LINKER_FLAGS=-fprofile-instr-generate" `
-             "-DCMAKE_SHARED_LINKER_FLAGS=-fprofile-instr-generate"
+        run: |
+          cmake -S ${{ env.BUILD_DIR }} -B build-pgo `
+            -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=clang-cl `
+            -DCMAKE_CXX_COMPILER=clang-cl `
+            -DCMAKE_CUDA_HOST_COMPILER=cl `
+            -DGGML_CUDA=ON `
+            -DCMAKE_CUDA_ARCHITECTURES=120 `
+            -DGGML_AVX=ON `
+            -DGGML_AVX2=ON `
+            -DGGML_FMA=ON `
+            -DGGML_F16C=ON `
+            -DGGML_AVX_VNNI=ON `
+            -DGGML_AVX512=ON `
+            -DGGML_AVX512_VBMI=ON `
+            -DGGML_AVX512_VNNI=ON `
+            -DGGML_AVX512_BF16=ON `
+            -DGGML_NATIVE=OFF `
+            -DLLAMA_FLASH_ATTN=ON `
+            -DBUILD_SHARED_LIBS=ON `
+            "-DCMAKE_C_FLAGS=-O2 -march=znver5 -fprofile-instr-generate -ffast-math" `
+            "-DCMAKE_CXX_FLAGS=-O2 -march=znver5 -fprofile-instr-generate -ffast-math" `
+            "-DCMAKE_EXE_LINKER_FLAGS=-fprofile-instr-generate" `
+            "-DCMAKE_SHARED_LINKER_FLAGS=-fprofile-instr-generate"
 
       - name: Build (instrumented)
         shell: pwsh
         run: cmake --build build-pgo --parallel 4
 
-      # ── 5b. Profile collection ────────────────────────────────────────────
       - name: Download profile model
         shell: pwsh
         run: |
@@ -148,8 +139,8 @@ jobs:
         run: |
           $env:LLVM_PROFILE_FILE = "${{ github.workspace }}\profiles\%p.profraw"
           $cli = "build-pgo\bin\llama-cli.exe"
-          & $cli -m profile-model.gguf -ngl 0 -t 4 -n 64  -p "Explain quantum computing briefly."
-          & $cli -m profile-model.gguf -ngl 0 -t 4 -n 64  -p "Write a short poem about winter."
+          & $cli -m profile-model.gguf -ngl 0 -t 4 -n 64 -p "Explain quantum computing briefly."
+          & $cli -m profile-model.gguf -ngl 0 -t 4 -n 64 -p "Write a short poem about winter."
           & $cli -m profile-model.gguf -ngl 0 -t 4 -n 128 -p "What is machine learning? Give examples."
 
       - name: Merge profiles
@@ -160,20 +151,19 @@ jobs:
           & "$vsPath\VC\Tools\Llvm\x64\bin\llvm-profdata.exe" `
             merge -output=profiles\merged.profdata profiles\*.profraw
 
-      # ── 5c. PGO pass 2 — optimized build ─────────────────────────────────
       - name: Configure (optimized)
         shell: pwsh
         run: |
           $prof = ("${{ github.workspace }}/profiles/merged.profdata") -replace '\\', '/'
-         cmake -S ${{ env.BUILD_DIR }} -B build `
-             -G Ninja `
-             -DCMAKE_BUILD_TYPE=Release `
-             -DCMAKE_C_COMPILER=clang-cl `
-             -DCMAKE_CXX_COMPILER=clang-cl `
-             -DCMAKE_CUDA_HOST_COMPILER=cl `
-             -DGGML_CUDA=ON `
-             -DCMAKE_CUDA_ARCHITECTURES=120 `
-             -DGGML_AVX=ON `
+          cmake -S ${{ env.BUILD_DIR }} -B build `
+            -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=clang-cl `
+            -DCMAKE_CXX_COMPILER=clang-cl `
+            -DCMAKE_CUDA_HOST_COMPILER=cl `
+            -DGGML_CUDA=ON `
+            -DCMAKE_CUDA_ARCHITECTURES=120 `
+            -DGGML_AVX=ON `
             -DGGML_AVX2=ON `
             -DGGML_FMA=ON `
             -DGGML_F16C=ON `
@@ -190,29 +180,21 @@ jobs:
             "-DCMAKE_EXE_LINKER_FLAGS=-flto=thin" `
             "-DCMAKE_SHARED_LINKER_FLAGS=-flto=thin"
 
-      # ── 6. Build (optimized) ──────────────────────────────────────────────
       - name: Build (Release)
         shell: pwsh
         run: cmake --build build --parallel 4
 
-      # ── 7. Collect artifacts ──────────────────────────────────────────────
       - name: Collect artifacts
         shell: pwsh
         run: |
           $out = "artifacts\${{ env.ARTIFACT_NAME }}"
           New-Item -ItemType Directory -Path $out -Force
-
-          # Binaries (Ninja single-config: no Release subdir)
           Copy-Item build\bin\*.exe $out -ErrorAction SilentlyContinue
           Copy-Item build\bin\*.dll $out -ErrorAction SilentlyContinue
-
-          # CUDA runtime DLLs (needed on machines without full CUDA install)
           $cudaBin = "$env:CUDA_PATH\bin"
           @("cudart64_*.dll","cublas64_*.dll","cublasLt64_*.dll") | ForEach-Object {
             Copy-Item "$cudaBin\$_" $out -ErrorAction SilentlyContinue
           }
-
-          # Build metadata
           @{
             upstream_repo   = "${{ env.LLAMA_REPO }}"
             upstream_ref    = "${{ steps.resolve.outputs.ref }}"
@@ -224,11 +206,9 @@ jobs:
             pgo             = "ON (CPU paths, Qwen2.5-0.5B workload)"
             flash_attention = "ON"
           } | ConvertTo-Json | Set-Content "$out\build-info.json"
-
           Write-Host "Artifact contents:"
           Get-ChildItem $out | Format-Table Name, Length
 
-      # ── 8. Upload artifacts ───────────────────────────────────────────────
       - name: Upload artifacts
         if: ${{ github.event.inputs.upload_artifacts != 'false' }}
         uses: actions/upload-artifact@v7.0.1
@@ -237,7 +217,6 @@ jobs:
           path: artifacts/
           retention-days: 30
 
-      # ── 9. Create GitHub Release (scheduled builds only) ─────────────────
       - name: Create Release
         if: github.event_name == 'schedule'
         uses: softprops/action-gh-release@v3.0.0
@@ -254,4 +233,3 @@ jobs:
           files: artifacts/**/*
           draft: false
           prerelease: false
-
