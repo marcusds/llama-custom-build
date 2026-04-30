@@ -205,7 +205,7 @@ jobs:
           Copy-Item build\bin\*.dll $out -ErrorAction SilentlyContinue
 
           # CUDA runtime DLLs (needed on machines without full CUDA install)
-          $cudaBin = "${{ steps.cuda-toolkit.outputs.CUDA_PATH }}\bin"
+          $cudaBin = "$env:CUDA_PATH\bin"
           @("cudart64_*.dll","cublas64_*.dll","cublasLt64_*.dll") | ForEach-Object {
             Copy-Item "$cudaBin\$_" $out -ErrorAction SilentlyContinue
           }
