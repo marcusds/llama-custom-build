@@ -97,6 +97,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_C_COMPILER=clang-cl `
             -DCMAKE_CXX_COMPILER=clang-cl `
+            -DCMAKE_CUDA_HOST_COMPILER=cl `
             -DGGML_CUDA=ON `
             -DCMAKE_CUDA_ARCHITECTURES=120 `
 
@@ -157,6 +158,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_C_COMPILER=clang-cl `
             -DCMAKE_CXX_COMPILER=clang-cl `
+            -DCMAKE_CUDA_HOST_COMPILER=cl `
             -DGGML_CUDA=ON `
             -DCMAKE_CUDA_ARCHITECTURES=120 `
 
