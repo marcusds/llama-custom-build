@@ -94,10 +94,16 @@ jobs:
         with:
           arch: x64
 
+      - name: Clean stale builds
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force build-pgo -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force build -ErrorAction SilentlyContinue
+
       - name: Configure (instrumented)
         shell: pwsh
         run: |
-          cmake -S ${{ env.BUILD_DIR }} -B build-pgo -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_CUDA_HOST_COMPILER=cl -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120 -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_AVX_VNNI=ON -DGGML_AVX512=ON -DGGML_AVX512_VBMI=ON -DGGML_AVX512_VNNI=ON -DGGML_AVX512_BF16=OFF -DGGML_NATIVE=OFF -DLLAMA_FLASH_ATTN=ON -DBUILD_SHARED_LIBS=ON "-DCMAKE_C_FLAGS=-O2 -march=znver5 -fprofile-instr-generate" "-DCMAKE_CXX_FLAGS=-O2 -march=znver5 -fprofile-instr-generate" "-DCMAKE_EXE_LINKER_FLAGS=-fprofile-instr-generate" "-DCMAKE_SHARED_LINKER_FLAGS=-fprofile-instr-generate"
+          cmake -S ${{ env.BUILD_DIR }} -B build-pgo -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_CUDA_HOST_COMPILER=cl -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120 -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_AVX_VNNI=ON -DGGML_NATIVE=OFF -DLLAMA_CPU_AOT_ALWAYS_LOAD=OFF -DBUILD_SHARED_LIBS=ON "-DCMAKE_C_FLAGS=-O2 -march=znver4 -mprefer-vector-width=256 -fprofile-instr-generate" "-DCMAKE_CXX_FLAGS=-O2 -march=znver4 -mprefer-vector-width=256 -fprofile-instr-generate" "-DCMAKE_EXE_LINKER_FLAGS=-fprofile-instr-generate" "-DCMAKE_SHARED_LINKER_FLAGS=-fprofile-instr-generate"
 
       - name: Build (instrumented)
         shell: pwsh
@@ -132,30 +138,7 @@ jobs:
         shell: pwsh
         run: |
           $prof = ("${{ github.workspace }}/profiles/merged.profdata") -replace '\\', '/'
-          cmake -S ${{ env.BUILD_DIR }} -B build `
-            -G Ninja `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_C_COMPILER=clang-cl `
-            -DCMAKE_CXX_COMPILER=clang-cl `
-            -DCMAKE_CUDA_HOST_COMPILER=cl `
-            -DGGML_CUDA=ON `
-            -DCMAKE_CUDA_ARCHITECTURES=120 `
-            -DGGML_AVX=ON `
-            -DGGML_AVX2=ON `
-            -DGGML_FMA=ON `
-            -DGGML_F16C=ON `
-            -DGGML_AVX_VNNI=ON `
-            -DGGML_AVX512=ON `
-            -DGGML_AVX512_VBMI=ON `
-            -DGGML_AVX512_VNNI=ON `
-            -DGGML_AVX512_BF16=OFF `
-            -DGGML_NATIVE=OFF `
-            -DLLAMA_FLASH_ATTN=ON `
-            -DBUILD_SHARED_LIBS=ON `
-            "-DCMAKE_C_FLAGS=-O3 -march=znver5 -fprofile-instr-use=$prof -fprofile-correction -flto=thin -ffast-math" `
-            "-DCMAKE_CXX_FLAGS=-O3 -march=znver5 -fprofile-instr-use=$prof -fprofile-correction -flto=thin -ffast-math" `
-            "-DCMAKE_EXE_LINKER_FLAGS=-flto=thin" `
-            "-DCMAKE_SHARED_LINKER_FLAGS=-flto=thin"
+          cmake -S ${{ env.BUILD_DIR }} -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_CUDA_HOST_COMPILER=cl -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120 -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_AVX_VNNI=ON -DGGML_NATIVE=OFF -DLLAMA_CPU_AOT_ALWAYS_LOAD=OFF -DBUILD_SHARED_LIBS=ON "-DCMAKE_C_FLAGS=-O3 -march=znver4 -mprefer-vector-width=256 -fprofile-instr-use=$prof -fprofile-correction -flto=thin -ffast-math" "-DCMAKE_CXX_FLAGS=-O3 -march=znver4 -mprefer-vector-width=256 -fprofile-instr-use=$prof -fprofile-correction -flto=thin -ffast-math" "-DCMAKE_EXE_LINKER_FLAGS=-flto=thin" "-DCMAKE_SHARED_LINKER_FLAGS=-flto=thin"
 
       - name: Build (Release)
         shell: pwsh
@@ -179,7 +162,7 @@ jobs:
             build_date      = (Get-Date -Format "yyyy-MM-dd HH:mm:ss UTC")
             cuda_arch       = "sm_120 (RTX 5000 / Blackwell)"
             compiler        = "ClangCL (VS 2022 toolset)"
-            cpu_flags       = "AVX2, FMA, F16C, AVX_VNNI, AVX512, AVX512_VBMI, AVX512_VNNI, AVX512_BF16"
+            cpu_flags       = "AVX2, FMA, F16C, AVX_VNNI"
             pgo             = "ON (CPU paths, Qwen2.5-0.5B workload)"
             flash_attention = "ON"
           } | ConvertTo-Json | Set-Content "$out\build-info.json"
@@ -205,7 +188,7 @@ jobs:
 
             **Target hardware:** RTX 5000 (sm_120) + Zen 5
             **CUDA:** 13.x
-            **CPU flags:** AVX2, FMA, F16C, AVX_VNNI, AVX512, AVX512-VBMI, AVX512-VNNI, AVX512-BF16
+            **CPU flags:** AVX2, FMA, F16C, AVX_VNNI
             **Flash Attention:** Enabled
           files: artifacts/**/*
           draft: false
