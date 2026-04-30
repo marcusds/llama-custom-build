@@ -1,6 +1,8 @@
 name: Build llama.cpp (RTX 5000 / Zen 5)
 
 on:
+  push:
+    branches: [main]
   # Run on a schedule to pick up upstream changes automatically
   schedule:
     - cron: '0 3 * * *'
