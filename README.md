@@ -72,6 +72,19 @@ Scheduled builds also create a **GitHub Release** tagged `build-<sha>`.
 
 ---
 
+## MSVC PGO acceptance criteria
+
+PGO is treated as valid only when all checks pass:
+
+1. Instrumented build completes successfully (`build.ps1 <config> -Action pgo`).
+2. Profiling run produces one or more `*.pgc` files in `build\`.
+3. Optimized rebuild (`PGUpdate=Use`) completes successfully.
+4. One or more `*.pgd` files exist after optimized rebuild.
+
+`build.ps1` now records these checks in each PGO build's `BUILD.md` under **PGO Verification** with PASS/FAIL status.
+
+---
+
 ## Runtime tip (Windows)
 
 For best throughput when using `llama-server` or `llama-cli`:

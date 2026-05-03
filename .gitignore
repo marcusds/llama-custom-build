@@ -13,3 +13,5 @@ llama-src/
 .vs/
 
 /.idea/
+/actions-runner
+/builds/
