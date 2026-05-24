@@ -67,7 +67,7 @@ jobs:
 
       - name: Cache CUDA Toolkit 13.2.1
         id: cache-cuda
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2
           key: cuda-13.2.1-redist-v1-windows-2022
