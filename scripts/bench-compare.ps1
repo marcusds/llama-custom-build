@@ -120,6 +120,11 @@ param(
   [int]$Reps = 5,
   [int]$Runs = 1,
   [int]$NGL = 999,
+  [int]$BatchSize = 0,
+  [int]$UBatchSize = 0,
+  [string]$CtkType = "",
+  [string]$CtvType = "",
+  [int]$FlashAttn = 1,
   [string]$WorkDir = "bench-work",
   [switch]$Refresh,
   [switch]$PublishToRelease,
@@ -248,10 +253,21 @@ function Invoke-Bench {
   $jsonFile = Join-Path $WorkDir ("bench-$Label.json")
   $logFile  = Join-Path $WorkDir ("bench-$Label.log")
 
-  Write-Host "  running: $BenchExe" -ForegroundColor DarkGray
-  Write-Host "  args:    -m <model> -p $Pp -n $Tg -r $Reps -ngl $NGL -o json" -ForegroundColor DarkGray
+  $extraArgs = @()
+  if ($BatchSize  -gt 0) { $extraArgs += @('-b',   "$BatchSize") }
+  if ($UBatchSize -gt 0) { $extraArgs += @('-ub',  "$UBatchSize") }
+  if ($CtkType)          { $extraArgs += @('-ctk', $CtkType) }
+  if ($CtvType)          { $extraArgs += @('-ctv', $CtvType) }
+  if ($FlashAttn -ge 0)  { $extraArgs += @('-fa',  "$FlashAttn") }
 
-  $output = & $BenchExe -m $ModelPath -p $Pp -n $Tg -r $Reps -ngl $NGL -o json 2>&1
+  $argDisplay = "-m <model> -p $Pp -n $Tg -r $Reps -ngl $NGL"
+  if ($extraArgs.Count) { $argDisplay += ' ' + ($extraArgs -join ' ') }
+  $argDisplay += ' -o json'
+
+  Write-Host "  running: $BenchExe" -ForegroundColor DarkGray
+  Write-Host "  args:    $argDisplay" -ForegroundColor DarkGray
+
+  $output = & $BenchExe -m $ModelPath -p $Pp -n $Tg -r $Reps -ngl $NGL @extraArgs -o json 2>&1
   $env:PATH = $oldPath
 
   if ($LASTEXITCODE -ne 0) {
