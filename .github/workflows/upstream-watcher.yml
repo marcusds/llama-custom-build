@@ -40,20 +40,20 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${{ steps.upstream.outputs.tag }}"
+          marker="upstream-$tag"
+          assets=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$marker" --jq '.assets[].name' 2>/dev/null || true)
+          echo "Existing assets in $marker release:"
+          echo "$assets"
           have_msvc=false
           have_clang=false
-          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/upstream-$tag-msvc" >/dev/null 2>&1; then
-            have_msvc=true
-          fi
-          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/upstream-$tag-clang" >/dev/null 2>&1; then
-            have_clang=true
-          fi
-          echo "msvc marker: $have_msvc, clang marker: $have_clang"
+          if echo "$assets" | grep -q -- "-msvc-.*\.zip"; then have_msvc=true; fi
+          if echo "$assets" | grep -q -- "-clang-.*\.zip"; then have_clang=true; fi
+          echo "msvc asset present: $have_msvc, clang asset present: $have_clang"
           if [ "$have_msvc" = "true" ] && [ "$have_clang" = "true" ]; then
-            echo "Both compilers already built upstream $tag. Nothing to do."
+            echo "Both compiler zips already in $marker. Nothing to do."
             echo "built=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Missing one or both compiler builds. Dispatching build.yml."
+            echo "Release missing one or both compiler zips. Dispatching build.yml."
             echo "built=false" >> "$GITHUB_OUTPUT"
           fi
 

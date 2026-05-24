@@ -245,11 +245,10 @@ jobs:
         run: |
           $ref = "${{ steps.resolve.outputs.ref }}"
           $event = "${{ github.event_name }}"
-          $compiler = "${{ matrix.compiler }}"
           $isUpstreamTag = ($ref -ne "master" -and $ref -ne "" -and $event -eq "workflow_dispatch")
           if ($isUpstreamTag) {
-            "tag=upstream-$ref-$compiler" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            "name=llama.cpp upstream $ref ($compiler, sm_120 + Zen 5)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "tag=upstream-$ref" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "name=llama.cpp upstream $ref (sm_120 + Zen 5)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
             "make_release=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           } else {
             "make_release=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
@@ -264,11 +263,15 @@ jobs:
           body: |
             Automated build of [llama.cpp](${{ env.LLAMA_REPO }}) @ `${{ steps.upstream.outputs.sha }}`
             Upstream ref: `${{ steps.resolve.outputs.ref }}`
-            Compiler: `${{ matrix.compiler }}`
 
             **Target hardware:** RTX 5000 / 5090 (sm_120) + Zen 5
             **CUDA:** 13.2.1
             **Flash Attention:** Enabled
+
+            Two artifacts per release, one per host compiler:
+            - `*-msvc-*.zip` -- MSVC w/ AVX-512 (F/BW/CD/DQ/VL + VBMI/VNNI)
+            - `*-clang-*.zip` -- ClangCL w/ `-march=znver4` + ThinLTO
           files: artifacts/*.zip
           draft: false
           prerelease: false
+          append_body: false
