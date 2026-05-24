@@ -157,6 +157,16 @@ first run and reuses it afterward.
 
 # Pin specific release tags
 .\scripts\bench-compare.ps1 -CustomTag upstream-b9297
+
+# Append the result table to the GitHub Release body (per-model section,
+# replaced on re-run for the same model)
+.\scripts\bench-compare.ps1 -PublishToRelease
+
+# Publish to a specific release tag (useful when both customs are local)
+.\scripts\bench-compare.ps1 `
+  -CustomMsvcPath  D:\local\msvc\bin `
+  -CustomClangPath D:\local\clang\bin `
+  -PublishToRelease -ReleaseTag upstream-b9297
 ```
 
 `-CustomMsvcPath` / `-CustomClangPath` point to folders containing

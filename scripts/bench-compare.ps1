@@ -75,6 +75,21 @@
 .PARAMETER Refresh
   Re-download builds even if cached.
 
+.PARAMETER PublishToRelease
+  After the bench finishes, append/replace a per-model markdown table inside
+  the GitHub Release body for the corresponding upstream-<tag> release in
+  marcusds/llama-custom-build. Sections are keyed by model filename so
+  re-running against the same model overwrites the prior table; benching a
+  different model appends a new section alongside.
+
+  Requires at least one msvc/clang target to come from a release (so we know
+  the upstream tag). Use -ReleaseTag to override.
+
+.PARAMETER ReleaseTag
+  Explicit upstream-<tag> name in marcusds/llama-custom-build to publish the
+  bench table to. Only used when -PublishToRelease is set. Defaults to the
+  tag of whichever msvc/clang target came from a release.
+
 .EXAMPLE
   # Default: 3-way bench (official + custom msvc + custom clang from releases)
   .\scripts\bench-compare.ps1
@@ -104,7 +119,9 @@ param(
   [int]$Runs = 3,
   [int]$NGL = 999,
   [string]$WorkDir = "bench-work",
-  [switch]$Refresh
+  [switch]$Refresh,
+  [switch]$PublishToRelease,
+  [string]$ReleaseTag = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -453,3 +470,86 @@ Write-Host ""
 Write-Host "Saved: $outFile" -ForegroundColor Gray
 Write-Host "Builds cached under: $WorkDir" -ForegroundColor Gray
 Write-Host "(re-run with -Refresh to re-download)" -ForegroundColor DarkGray
+
+# ---------- Optional: publish to GitHub release ----------
+
+if ($PublishToRelease) {
+  # Resolve target release tag
+  $tag = $ReleaseTag
+  if (-not $tag) {
+    $custom = $targets | Where-Object { $_.Source -eq 'release' -and ($_.Label -eq 'msvc' -or $_.Label -eq 'clang') } | Select-Object -First 1
+    if ($custom) {
+      $tag = $custom.Tag
+    } else {
+      # both customs are local paths; fall back to latest release of CUSTOM_REPO
+      Write-Host "  no release-sourced custom target; looking up latest $CUSTOM_REPO release..." -ForegroundColor DarkGray
+      $latest = gh release list --repo $CUSTOM_REPO --limit 1 --json tagName | ConvertFrom-Json
+      if (-not $latest -or $latest.Count -eq 0) {
+        Write-Warning "-PublishToRelease: no releases found in $CUSTOM_REPO. Pass -ReleaseTag explicitly."
+        return
+      }
+      $tag = $latest[0].tagName
+    }
+  }
+
+  Write-Host ""
+  Write-Host "Publishing bench table to $CUSTOM_REPO release $tag ..." -ForegroundColor Cyan
+
+  $modelName = Split-Path -Leaf $Model
+  $startMarker = "<!-- bench:$modelName -->"
+  $endMarker   = "<!-- /bench:$modelName -->"
+
+  $now = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'")
+  $sb = New-Object System.Text.StringBuilder
+  [void]$sb.AppendLine($startMarker)
+  [void]$sb.AppendLine("### Benchmark: ``$modelName``")
+  [void]$sb.AppendLine("")
+  [void]$sb.AppendLine("Date: $now | Reps: $Reps (intra-process) | Runs: $Runs (fresh processes) | Total samples per test: $($Reps * $Runs) | NGL: $NGL | Baseline: ``$($baseline.Label)``")
+  [void]$sb.AppendLine("")
+
+  # Header row from $rows
+  $cols = @($rows[0].PSObject.Properties.Name)
+  [void]$sb.AppendLine("| " + ($cols -join " | ") + " |")
+  [void]$sb.AppendLine("|" + ((1..$cols.Count | ForEach-Object { "---" }) -join "|") + "|")
+  foreach ($r in $rows) {
+    $vals = $cols | ForEach-Object { $r.$_ }
+    [void]$sb.AppendLine("| " + ($vals -join " | ") + " |")
+  }
+
+  [void]$sb.AppendLine("")
+  [void]$sb.AppendLine("Targets:")
+  foreach ($t in $targets) {
+    $src = if ($t.Source -eq 'local') { "local" } else { "$($t.Repo)@$($t.Tag)" }
+    [void]$sb.AppendLine("- ``$($t.Label)`` -- $src")
+  }
+  [void]$sb.AppendLine($endMarker)
+  $section = $sb.ToString()
+
+  $existing = gh release view $tag --repo $CUSTOM_REPO --json body --jq '.body' 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    Write-Warning "gh release view failed for $tag in $CUSTOM_REPO. Skipping publish."
+    return
+  }
+  if ($null -eq $existing) { $existing = "" }
+
+  $startEsc = [regex]::Escape($startMarker)
+  $endEsc   = [regex]::Escape($endMarker)
+  $pattern  = "$startEsc[\s\S]*?$endEsc\r?\n?"
+  if ([regex]::IsMatch($existing, $pattern)) {
+    $new = [regex]::Replace($existing, $pattern, $section, 1)
+    Write-Host "  replacing existing section for $modelName" -ForegroundColor DarkGray
+  } else {
+    $new = $existing.TrimEnd() + "`n`n" + $section
+    Write-Host "  appending new section for $modelName" -ForegroundColor DarkGray
+  }
+
+  $notesFile = Join-Path $WorkDir ("release-notes-$tag.md")
+  $new | Out-File -FilePath $notesFile -Encoding utf8 -NoNewline
+
+  gh release edit $tag --repo $CUSTOM_REPO --notes-file $notesFile
+  if ($LASTEXITCODE -ne 0) {
+    Write-Warning "gh release edit failed for $tag. Notes saved to $notesFile for manual update."
+  } else {
+    Write-Host "  updated $CUSTOM_REPO release $tag" -ForegroundColor Green
+  }
+}
