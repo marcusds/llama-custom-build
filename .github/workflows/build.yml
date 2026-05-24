@@ -152,10 +152,12 @@ jobs:
             -DLLAMA_CPU_AOT_ALWAYS_LOAD=OFF -DLLAMA_BUILD_UI=OFF -DLLAMA_BUILD_APP=OFF `
             -DBUILD_SHARED_LIBS=ON `
             -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON `
-            "-DCMAKE_C_FLAGS=/arch:AVX512 /Oi /Ot /Gy /GL /fp:precise" `
-            "-DCMAKE_CXX_FLAGS=/arch:AVX512 /Oi /Ot /Gy /GL /fp:precise /EHsc" `
-            "-DCMAKE_EXE_LINKER_FLAGS=/LTCG" `
-            "-DCMAKE_SHARED_LINKER_FLAGS=/LTCG"
+            "-DCMAKE_C_FLAGS_RELEASE=/MD /O2 /Ob3 /DNDEBUG" `
+            "-DCMAKE_CXX_FLAGS_RELEASE=/MD /O2 /Ob3 /DNDEBUG" `
+            "-DCMAKE_C_FLAGS=/arch:AVX512 /Oi /Ot /Gy /Gw /GL /Zc:inline /fp:precise" `
+            "-DCMAKE_CXX_FLAGS=/arch:AVX512 /Oi /Ot /Gy /Gw /GL /Zc:inline /fp:precise /EHsc" `
+            "-DCMAKE_EXE_LINKER_FLAGS=/LTCG /OPT:REF /OPT:ICF /CGTHREADS:8" `
+            "-DCMAKE_SHARED_LINKER_FLAGS=/LTCG /OPT:REF /OPT:ICF /CGTHREADS:8"
 
       - name: Configure (ClangCL)
         if: matrix.compiler == 'clang'
@@ -172,10 +174,10 @@ jobs:
             -DGGML_NATIVE=OFF `
             -DLLAMA_CPU_AOT_ALWAYS_LOAD=OFF -DLLAMA_BUILD_UI=OFF -DLLAMA_BUILD_APP=OFF `
             -DBUILD_SHARED_LIBS=ON `
-            "-DCMAKE_C_FLAGS=-O3 -march=znver4 -mno-avx512f -mavxvnni -mprefer-vector-width=256 -flto=thin" `
-            "-DCMAKE_CXX_FLAGS=-O3 -march=znver4 -mno-avx512f -mavxvnni -mprefer-vector-width=256 -flto=thin /EHsc" `
-            "-DCMAKE_EXE_LINKER_FLAGS=-flto=thin" `
-            "-DCMAKE_SHARED_LINKER_FLAGS=-flto=thin"
+            "-DCMAKE_C_FLAGS=-O3 -march=znver4 -mno-avx512f -mavxvnni -mprefer-vector-width=256 -flto=thin -ffunction-sections -fdata-sections" `
+            "-DCMAKE_CXX_FLAGS=-O3 -march=znver4 -mno-avx512f -mavxvnni -mprefer-vector-width=256 -flto=thin -ffunction-sections -fdata-sections /EHsc" `
+            "-DCMAKE_EXE_LINKER_FLAGS=-flto=thin /OPT:REF /OPT:ICF" `
+            "-DCMAKE_SHARED_LINKER_FLAGS=-flto=thin /OPT:REF /OPT:ICF"
 
       - name: Build (Release)
         shell: pwsh
