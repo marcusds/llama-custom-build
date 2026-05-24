@@ -65,14 +65,14 @@ jobs:
           echo "sha=$sha" >> $env:GITHUB_OUTPUT
           echo "short=$short" >> $env:GITHUB_OUTPUT
 
-      - name: Cache CUDA Toolkit 13.2.0
+      - name: Cache CUDA Toolkit 13.2.1
         id: cache-cuda
         uses: actions/cache@v4
         with:
           path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2
-          key: cuda-13.2.0-redist-v1-windows-2022
+          key: cuda-13.2.1-redist-v1-windows-2022
 
-      - name: Install CUDA Toolkit 13.2.0 (redist archives)
+      - name: Install CUDA Toolkit 13.2.1 (redist archives)
         if: steps.cache-cuda.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
@@ -82,16 +82,16 @@ jobs:
           New-Item -ItemType Directory -Path $stage -Force | Out-Null
           $base = "https://developer.download.nvidia.com/compute/cuda/redist"
           $archives = @(
-            "cuda_crt/windows-x86_64/cuda_crt-windows-x86_64-13.2.51-archive.zip",
-            "cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-13.2.51-archive.zip",
-            "cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-13.2.51-archive.zip",
-            "cuda_nvrtc/windows-x86_64/cuda_nvrtc-windows-x86_64-13.2.51-archive.zip",
-            "libcublas/windows-x86_64/libcublas-windows-x86_64-13.3.0.5-archive.zip",
-            "libnvvm/windows-x86_64/libnvvm-windows-x86_64-13.2.51-archive.zip",
-            "cuda_nvtx/windows-x86_64/cuda_nvtx-windows-x86_64-13.2.20-archive.zip",
-            "cuda_profiler_api/windows-x86_64/cuda_profiler_api-windows-x86_64-13.2.20-archive.zip",
-            "visual_studio_integration/windows-x86_64/visual_studio_integration-windows-x86_64-13.2.20-archive.zip",
-            "cuda_cccl/windows-x86_64/cuda_cccl-windows-x86_64-13.2.27-archive.zip"
+            "cuda_crt/windows-x86_64/cuda_crt-windows-x86_64-13.2.78-archive.zip",
+            "cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-13.2.75-archive.zip",
+            "cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-13.2.78-archive.zip",
+            "cuda_nvrtc/windows-x86_64/cuda_nvrtc-windows-x86_64-13.2.78-archive.zip",
+            "libcublas/windows-x86_64/libcublas-windows-x86_64-13.4.0.1-archive.zip",
+            "libnvvm/windows-x86_64/libnvvm-windows-x86_64-13.2.78-archive.zip",
+            "cuda_nvtx/windows-x86_64/cuda_nvtx-windows-x86_64-13.2.75-archive.zip",
+            "cuda_profiler_api/windows-x86_64/cuda_profiler_api-windows-x86_64-13.2.75-archive.zip",
+            "visual_studio_integration/windows-x86_64/visual_studio_integration-windows-x86_64-13.2.75-archive.zip",
+            "cuda_cccl/windows-x86_64/cuda_cccl-windows-x86_64-13.2.75-archive.zip"
           )
           foreach ($a in $archives) {
             $url = "$base/$a"
