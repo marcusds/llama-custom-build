@@ -4,26 +4,63 @@ Automated build pipeline for [llama.cpp](https://github.com/ggml-org/llama.cpp),
 
 | Hardware | Spec                                        |
 |----------|---------------------------------------------|
-| GPU | RTX 5000 (Blackwell, sm_120) |
-| CPU | Zen 5, AVX-512                              |
+| GPU | RTX 5000 / 5090 (Blackwell, sm_120) |
+| CPU | Zen 5 (Ryzen 9800X3D) — AVX2 / FMA / AVX-VNNI (256-bit) |
 | OS | Windows 11 x64                              |
-| CUDA | 13.x                                        |
+| CUDA | 13.2.1                                      |
 
 This repo contains **no llama.cpp source code**. It only holds the CI pipeline that clones upstream at build time.
+
+---
+
+## Build differences vs upstream
+
+The official `ggml-org/llama.cpp` Windows CUDA release is a portable fat-binary
+targeting a wide range of GPUs and CPUs. This pipeline strips that down and
+re-tunes for one rig:
+
+| Aspect | Official upstream | This build |
+|---|---|---|
+| CUDA arch | Multi-arch fat binary | `sm_120` only (smaller, no JIT) |
+| CPU dispatch | `GGML_CPU_ALL_VARIANTS=ON` runtime ISA dispatch | Pinned `-march=znver4` + `-mavxvnni` |
+| CPU backend | `GGML_CPU=OFF`, shipped as separate DL backend (`GGML_BACKEND_DL=ON`) | Inline with CUDA build (`BUILD_SHARED_LIBS=ON`) |
+| Host compiler | MSVC `cl.exe` (Ninja Multi-Config) | ClangCL (Ninja) |
+| Optimization | CMake `Release` defaults (`/O2`) | `-O3 -mprefer-vector-width=256 -flto=thin` (ThinLTO) |
+| Exception handling | MSVC default (on) | Explicit `/EHsc` (clang-cl needs it) |
+| AVX-512 | Implicit via runtime variants | **OFF** (`-mno-avx512f`) — workaround for clang-cl `__AVX512BF16__` include bug in `ggml.c` |
+| `GGML_CUDA_NCCL` | Default `ON` | **OFF** (single-GPU rig, kills NCCL link dep) |
+| `GGML_CUDA_FA` | `ON` | `ON` (Flash Attention kernels) |
+| `GGML_CUDA_FA_ALL_QUANTS` | `OFF` | `OFF` (smaller binary; flip ON for max prompt-proc on uncommon quants) |
+| `GGML_CUDA_COMPRESSION_MODE` | unset | `size` (smaller CUDA fatbin) |
+| `LLAMA_BUILD_UI` | `ON` (downloads UI assets from HF Bucket at build time) | **OFF** (no network dep, no UI shipped) |
+| `LLAMA_BUILD_APP` | `ON` (unified `llama` binary) | **OFF** (only legacy `llama-*` binaries) |
+| `LLAMA_BUILD_BORINGSSL` | `ON` | unset (default) |
+| PGO | None | None |
+| Release cadence | Per upstream release | Per upstream release (automated via `upstream-watcher.yml`) |
+| Runner | `windows-2022` (GH-hosted) | `windows-2022` (GH-hosted) |
+
+**Net effect on this rig:** smaller binary, no useless multi-arch CUDA fatbin,
+no NCCL/UI dependencies, tuned-but-portable Zen 5 codegen. AVX-512 win is left
+on the table until the upstream clang-cl fix lands ([marcusds/llama.cpp@fix/clang-cl-avx512bf16-include](https://github.com/marcusds/llama.cpp/tree/fix/clang-cl-avx512bf16-include)).
 
 ---
 
 ## How it works
 
 ```
-[Upstream: ggml-org/llama.cpp master]
-              │  cloned fresh each run
+[Upstream release on ggml-org/llama.cpp]
+              │  upstream-watcher.yml polls every 30 min
               ▼
-  GitHub Actions (windows-latest)
-    └── CMake configure (custom flags)
+[workflow_dispatch build.yml with llama_ref=<upstream-tag>]
+              │
+              ▼
+  GitHub Actions (windows-2022)
+    └── Restore cached CUDA Toolkit 13.2.1 (redist archives)
+    └── Clone llama.cpp @ <upstream-tag>
+    └── CMake configure (ClangCL, sm_120, tuned znver4)
     └── Build Release
-    └── Package EXEs + DLLs
-    └── Upload artifact / create Release
+    └── Package EXEs + DLLs + CUDA runtime
+    └── Upload artifact + create GitHub Release tagged upstream-<tag>
 ```
 
 Builds run automatically whenever a new release is published on
@@ -37,7 +74,9 @@ the **Actions → Build llama.cpp → Run workflow** UI.
 
 1. Go to **Actions → Build llama.cpp**
 2. Click **Run workflow**
-3. Optionally specify a branch, tag, or commit SHA (defaults to `master`)
+3. Optionally specify a branch, tag, or commit SHA (defaults to `master`).
+   Passing an upstream release tag (e.g. `b6789`) also creates a GitHub
+   Release tagged `upstream-b6789` on success.
 
 ---
 
@@ -71,7 +110,9 @@ Each successful build uploads a zip containing:
 - All required `.dll` files (including CUDA runtime)
 - `build-info.json` — records upstream commit, date, and flags used
 
-Scheduled builds also create a **GitHub Release** tagged `build-<sha>`.
+Builds dispatched from `upstream-watcher.yml` (or manually with an upstream
+tag) also create a **GitHub Release** tagged `upstream-<tag>` (e.g.
+`upstream-b6789`).
 
 ---
 
