@@ -26,7 +26,10 @@ This repo contains **no llama.cpp source code**. It only holds the CI pipeline t
     └── Upload artifact / create Release
 ```
 
-Builds run automatically every **Sunday at 03:00 UTC**, or trigger manually.
+Builds run automatically whenever a new release is published on
+[ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp/releases), via the
+`upstream-watcher.yml` workflow (polls every 30 minutes). Manual builds via
+the **Actions → Build llama.cpp → Run workflow** UI.
 
 ---
 

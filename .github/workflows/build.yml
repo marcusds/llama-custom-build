@@ -3,8 +3,6 @@ name: Build llama.cpp (RTX 5000 / Zen 5)
 on:
   push:
     branches: [main]
-  schedule:
-    - cron: '0 3 * * *'
   workflow_dispatch:
     inputs:
       llama_ref:
@@ -182,16 +180,11 @@ jobs:
         shell: pwsh
         run: |
           $ref = "${{ steps.resolve.outputs.ref }}"
-          $short = "${{ steps.upstream.outputs.short }}"
           $event = "${{ github.event_name }}"
           $isUpstreamTag = ($ref -ne "master" -and $ref -ne "" -and $event -eq "workflow_dispatch")
           if ($isUpstreamTag) {
             "tag=upstream-$ref" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
             "name=llama.cpp upstream $ref (sm_120 + Zen 5)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            "make_release=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          } elseif ($event -eq "schedule") {
-            "tag=build-$short" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            "name=Auto-build @ $short" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
             "make_release=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           } else {
             "make_release=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
