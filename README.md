@@ -26,8 +26,8 @@ head-to-head:
 | Host compiler | MSVC `cl.exe` (Ninja Multi-Config) | MSVC `cl.exe` (Ninja) | ClangCL (Ninja) |
 | CUDA arch | Multi-arch fat binary | `sm_120` only | `sm_120` only |
 | CPU dispatch | `GGML_CPU_ALL_VARIANTS=ON` runtime ISA dispatch | Pinned via `/arch:AVX512` + GGML_AVX_VNNI ON | Pinned `-march=znver4` + `-mavxvnni` |
-| AVX-512 | Implicit via runtime variants | **ON** (F/BW/CD/DQ/VL + VBMI/VNNI/BF16 via GGML cmake flags) | **OFF** -- clang-cl `__AVX512BF16__` include bug ([fork patch](https://github.com/marcusds/llama.cpp/tree/fix/clang-cl-avx512bf16-include)) |
-| Optimization | CMake `Release` defaults (`/O2`) | `/O2 /Ob3 /Oi /Ot /Gy /GL` | `-O3 -mprefer-vector-width=256 -flto=thin` |
+| AVX-512 | Implicit via runtime variants | **ON** (F/BW/CD/DQ/VL + VBMI/VNNI; BF16 still OFF, upstream `sgemm.cpp` `(__m512bh)` C-cast rejected by MSVC) | **OFF** -- clang-cl `__AVX512BF16__` include bug ([fork patch](https://github.com/marcusds/llama.cpp/tree/fix/clang-cl-avx512bf16-include)) |
+| Optimization | CMake `Release` defaults (`/O2`) | CMake `Release` `/O2 /Ob2` + `/Oi /Ot /Gy /GL` | `-O3 -mprefer-vector-width=256 -flto=thin` |
 | LTO | None explicit | `/GL` + `/LTCG` | ThinLTO (`-flto=thin`) |
 | Exception handling | MSVC default (on) | MSVC default (on) | Explicit `/EHsc` (clang-cl needs it) |
 | CPU backend | `GGML_CPU=OFF`, shipped as separate DL backend (`GGML_BACKEND_DL=ON`) | Inline (`BUILD_SHARED_LIBS=ON`) | Inline (`BUILD_SHARED_LIBS=ON`) |
