@@ -527,13 +527,23 @@ if ($PublishToRelease) {
   # somewhere in the gh -> GH API round-trip.
   $section = ($lines -join "`n")
 
-  $existing = gh release view $tag --repo $CUSTOM_REPO --json body --jq '.body'
+  # PowerShell captures stdout as a string ARRAY (split on newlines), so we
+  # have to join it back into a single string before doing any regex /
+  # concatenation -- otherwise '+ "`n" +' will array-stringify with spaces
+  # and silently drop every newline from the existing body.
+  $existingArr = gh release view $tag --repo $CUSTOM_REPO --json body --jq '.body'
   if ($LASTEXITCODE -ne 0) {
     Write-Warning "gh release view failed for $tag in $CUSTOM_REPO. Skipping publish."
     return
   }
-  if ($null -eq $existing) { $existing = "" }
-  # Normalize existing body to LF as well so the join is uniform
+  if ($null -eq $existingArr) {
+    $existing = ""
+  } elseif ($existingArr -is [array]) {
+    $existing = $existingArr -join "`n"
+  } else {
+    $existing = [string]$existingArr
+  }
+  # Normalize to LF
   $existing = $existing -replace "`r`n", "`n" -replace "`r", "`n"
 
   $startEsc = [regex]::Escape($startMarker)
@@ -550,6 +560,12 @@ if ($PublishToRelease) {
   $notesFile = Join-Path $WorkDir ("release-notes-$tag.md")
   # Use [IO.File]::WriteAllText to guarantee no BOM and exact bytes
   [System.IO.File]::WriteAllText($notesFile, $new, [System.Text.UTF8Encoding]::new($false))
+
+  # Debug: confirm what we're about to send has actual newlines
+  $bytes = [System.IO.File]::ReadAllBytes($notesFile)
+  $lfCount = ($bytes | Where-Object { $_ -eq 10 }).Count
+  $crCount = ($bytes | Where-Object { $_ -eq 13 }).Count
+  Write-Host "  notes-file: $($bytes.Length) bytes, $lfCount LF, $crCount CR" -ForegroundColor DarkGray
 
   gh release edit $tag --repo $CUSTOM_REPO --notes-file $notesFile
   if ($LASTEXITCODE -ne 0) {
