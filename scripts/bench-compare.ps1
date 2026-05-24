@@ -18,6 +18,8 @@
 
 .PARAMETER Model
   Path to a GGUF model file. Must be the same model for both builds.
+  If omitted, a default Qwen3.5-9B-UD-Q4_K_XL.gguf is downloaded from
+  Hugging Face into the work directory and reused on subsequent runs.
 
 .PARAMETER OfficialTag
   Release tag from ggml-org/llama.cpp. Default "latest" picks the newest
@@ -51,7 +53,7 @@
   .\scripts\bench-compare.ps1 -Model model.gguf -Pp "128,512,2048" -Tg "64,128"
 #>
 param(
-  [Parameter(Mandatory=$true)][string]$Model,
+  [string]$Model = "",
   [string]$OfficialTag = "latest",
   [string]$CustomTag = "latest",
   [string]$Pp = "512",
@@ -64,8 +66,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$OFFICIAL_REPO = "ggml-org/llama.cpp"
-$CUSTOM_REPO   = "marcusds/llama-custom-build"
+$OFFICIAL_REPO   = "ggml-org/llama.cpp"
+$CUSTOM_REPO     = "marcusds/llama-custom-build"
+$DEFAULT_MODEL_URL  = "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-UD-Q4_K_XL.gguf?download=true"
+$DEFAULT_MODEL_NAME = "Qwen3.5-9B-UD-Q4_K_XL.gguf"
 
 function Assert-Tool {
   param([string]$Name)
@@ -75,6 +79,32 @@ function Assert-Tool {
 }
 
 Assert-Tool "gh"
+Assert-Tool "curl.exe"
+
+# Resolve work dir early so we can place the default model into it
+New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null
+$WorkDir = (Resolve-Path $WorkDir).Path
+
+if ([string]::IsNullOrWhiteSpace($Model)) {
+  $modelsDir = Join-Path $WorkDir "models"
+  New-Item -ItemType Directory -Path $modelsDir -Force | Out-Null
+  $Model = Join-Path $modelsDir $DEFAULT_MODEL_NAME
+  if (-not (Test-Path $Model)) {
+    Write-Host "No -Model specified. Downloading default ($DEFAULT_MODEL_NAME)..." -ForegroundColor Cyan
+    Write-Host "  $DEFAULT_MODEL_URL" -ForegroundColor DarkGray
+    $tmp = "$Model.partial"
+    if (Test-Path $tmp) { Remove-Item -Force $tmp }
+    curl.exe -fL --retry 3 --retry-delay 5 -o $tmp $DEFAULT_MODEL_URL
+    if ($LASTEXITCODE -ne 0) {
+      if (Test-Path $tmp) { Remove-Item -Force $tmp }
+      throw "Model download failed (curl exit $LASTEXITCODE)"
+    }
+    Move-Item -Path $tmp -Destination $Model -Force
+    Write-Host "  saved: $Model" -ForegroundColor Gray
+  } else {
+    Write-Host "Using cached default model: $Model" -ForegroundColor DarkGray
+  }
+}
 
 if (-not (Test-Path $Model)) {
   throw "Model file not found: $Model"
@@ -214,9 +244,6 @@ function Get-TestLabel {
 }
 
 # ---------- Run ----------
-
-New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null
-$WorkDir = (Resolve-Path $WorkDir).Path
 
 Write-Host ""
 Write-Host "Resolving releases ..." -ForegroundColor Cyan

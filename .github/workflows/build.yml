@@ -70,14 +70,46 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2
-          key: cuda-13.2.0-windows-2022
+          key: cuda-13.2.0-redist-v1-windows-2022
 
-      - name: Install CUDA Toolkit 13.2.0
+      - name: Install CUDA Toolkit 13.2.0 (redist archives)
         if: steps.cache-cuda.outputs.cache-hit != 'true'
-        uses: Jimver/cuda-toolkit@v0.2.35
-        with:
-          cuda: '13.2.0'
-          method: 'network'
+        shell: pwsh
+        run: |
+          $cudaPath = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2"
+          $stage = "$env:RUNNER_TEMP\cuda-redist"
+          New-Item -ItemType Directory -Path $cudaPath -Force | Out-Null
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          $base = "https://developer.download.nvidia.com/compute/cuda/redist"
+          $archives = @(
+            "cuda_crt/windows-x86_64/cuda_crt-windows-x86_64-13.2.51-archive.zip",
+            "cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-13.2.51-archive.zip",
+            "cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-13.2.51-archive.zip",
+            "cuda_nvrtc/windows-x86_64/cuda_nvrtc-windows-x86_64-13.2.51-archive.zip",
+            "libcublas/windows-x86_64/libcublas-windows-x86_64-13.3.0.5-archive.zip",
+            "libnvvm/windows-x86_64/libnvvm-windows-x86_64-13.2.51-archive.zip",
+            "cuda_nvtx/windows-x86_64/cuda_nvtx-windows-x86_64-13.2.20-archive.zip",
+            "cuda_profiler_api/windows-x86_64/cuda_profiler_api-windows-x86_64-13.2.20-archive.zip",
+            "visual_studio_integration/windows-x86_64/visual_studio_integration-windows-x86_64-13.2.20-archive.zip",
+            "cuda_cccl/windows-x86_64/cuda_cccl-windows-x86_64-13.2.27-archive.zip"
+          )
+          foreach ($a in $archives) {
+            $url = "$base/$a"
+            $fn = Split-Path -Leaf $a
+            $out = Join-Path $stage $fn
+            Write-Host "Downloading $fn"
+            curl.exe -fsSL -o $out $url
+            if ($LASTEXITCODE -ne 0) { throw "Download failed: $url" }
+          }
+          Get-ChildItem "$stage\*.zip" | ForEach-Object {
+            Write-Host "Extracting $($_.Name)"
+            Expand-Archive -Path $_.FullName -DestinationPath $stage -Force
+          }
+          Get-ChildItem -Path $stage -Directory -Filter "*-archive" | ForEach-Object {
+            Write-Host "Merging $($_.Name) -> $cudaPath"
+            Copy-Item -Path (Join-Path $_.FullName "*") -Destination $cudaPath -Recurse -Force
+          }
+          Remove-Item -Recurse -Force $stage
 
       - name: Set CUDA env and verify
         shell: pwsh
@@ -87,6 +119,7 @@ jobs:
             Write-Error "nvcc not found at $cudaPath\bin\nvcc.exe"; exit 1
           }
           "CUDA_PATH=$cudaPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "CUDA_PATH_V13_2=$cudaPath" | Out-File -FilePath $env:GITHUB_ENV -Append
           "$cudaPath\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
           & "$cudaPath\bin\nvcc.exe" --version
 

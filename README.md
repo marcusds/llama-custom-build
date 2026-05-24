@@ -79,17 +79,22 @@ Scheduled builds also create a **GitHub Release** tagged `build-<sha>`.
 pinned), then runs `llama-bench` on the same model with identical parameters
 and prints a side-by-side comparison.
 
-Requires `gh` CLI authenticated and a GGUF model on disk.
+Requires `gh` CLI authenticated. If `-Model` is omitted, the script downloads
+`Qwen3.5-9B-UD-Q4_K_XL.gguf` from Hugging Face into `bench-work/models/` on
+first run and reuses it afterward.
 
 ```powershell
-# Default: pp512 + tg128, 5 reps, -ngl 999, latest releases of both repos
+# Easiest: no args, auto-downloads default Qwen3.5-9B model
+.\scripts\bench-compare.ps1
+
+# Bring your own model
 .\scripts\bench-compare.ps1 -Model C:\models\qwen2.5-7b-q4km.gguf
 
 # Custom prompt/gen sweep
-.\scripts\bench-compare.ps1 -Model model.gguf -Pp "128,512,2048" -Tg "64,128"
+.\scripts\bench-compare.ps1 -Pp "128,512,2048" -Tg "64,128"
 
 # Pin a specific custom release tag
-.\scripts\bench-compare.ps1 -Model model.gguf -CustomTag build-abc1234567
+.\scripts\bench-compare.ps1 -CustomTag build-abc1234567
 ```
 
 Builds are cached under `bench-work/`; pass `-Refresh` to re-download. Each
