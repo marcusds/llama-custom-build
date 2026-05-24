@@ -259,7 +259,7 @@ $targets = @()
 if (-not $SkipOfficial) {
   Write-Host ""
   Write-Host "Resolving official ($OFFICIAL_REPO) ..." -ForegroundColor Cyan
-  $asset = Find-ReleaseAsset -Repo $OFFICIAL_REPO -Tag $OfficialTag -AssetGlob "*cuda-13*-x64.zip"
+  $asset = Find-ReleaseAsset -Repo $OFFICIAL_REPO -Tag $OfficialTag -AssetGlob "llama-*-bin-win-cuda-13*-x64.zip"
   Write-Host "  -> $($asset.Tag) :: $($asset.AssetName) ($([math]::Round($asset.AssetSize / 1MB, 1)) MB)" -ForegroundColor Gray
   $dest = Join-Path $WorkDir "official-$($asset.Tag)"
   $bench = Ensure-Build -Repo $OFFICIAL_REPO -Tag $asset.Tag -AssetName $asset.AssetName -Dest $dest
