@@ -64,7 +64,9 @@
 .PARAMETER Runs
   How many times to invoke llama-bench per target. Each Run is a fresh
   process so inter-process variance (CUDA init, GPU thermal, scheduler
-  drift) is captured. Default 3. Total samples per test = Runs * Reps.
+  drift) is captured. Default 1 (rely on llama-bench's own -r averaging,
+  fastest). Bump to 3+ when you want to expose cold-start variance and
+  produce stddev bars across invocations.
 
 .PARAMETER NGL
   GPU layers to offload (-ngl). Default 999.
@@ -116,7 +118,7 @@ param(
   [string]$Pp = "512",
   [string]$Tg = "128",
   [int]$Reps = 5,
-  [int]$Runs = 3,
+  [int]$Runs = 1,
   [int]$NGL = 999,
   [string]$WorkDir = "bench-work",
   [switch]$Refresh,
@@ -500,41 +502,43 @@ if ($PublishToRelease) {
   $endMarker   = "<!-- /bench:$modelName -->"
 
   $now = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'")
-  $sb = New-Object System.Text.StringBuilder
-  [void]$sb.AppendLine($startMarker)
-  [void]$sb.AppendLine("### Benchmark: ``$modelName``")
-  [void]$sb.AppendLine("")
-  [void]$sb.AppendLine("Date: $now | Reps: $Reps (intra-process) | Runs: $Runs (fresh processes) | Total samples per test: $($Reps * $Runs) | NGL: $NGL | Baseline: ``$($baseline.Label)``")
-  [void]$sb.AppendLine("")
-
-  # Header row from $rows
+  $lines = @()
+  $lines += $startMarker
+  $lines += "### Benchmark: ``$modelName``"
+  $lines += ""
+  $lines += "Date: $now | Reps: $Reps (intra-process) | Runs: $Runs (fresh processes) | Total samples per test: $($Reps * $Runs) | NGL: $NGL | Baseline: ``$($baseline.Label)``"
+  $lines += ""
   $cols = @($rows[0].PSObject.Properties.Name)
-  [void]$sb.AppendLine("| " + ($cols -join " | ") + " |")
-  [void]$sb.AppendLine("|" + ((1..$cols.Count | ForEach-Object { "---" }) -join "|") + "|")
+  $lines += "| " + ($cols -join " | ") + " |"
+  $lines += "|" + ((1..$cols.Count | ForEach-Object { "---" }) -join "|") + "|"
   foreach ($r in $rows) {
     $vals = $cols | ForEach-Object { $r.$_ }
-    [void]$sb.AppendLine("| " + ($vals -join " | ") + " |")
+    $lines += "| " + ($vals -join " | ") + " |"
   }
-
-  [void]$sb.AppendLine("")
-  [void]$sb.AppendLine("Targets:")
+  $lines += ""
+  $lines += "Targets:"
   foreach ($t in $targets) {
     $src = if ($t.Source -eq 'local') { "local" } else { "$($t.Repo)@$($t.Tag)" }
-    [void]$sb.AppendLine("- ``$($t.Label)`` -- $src")
+    $lines += "- ``$($t.Label)`` -- $src"
   }
-  [void]$sb.AppendLine($endMarker)
-  $section = $sb.ToString()
+  $lines += $endMarker
+  # Use explicit LF (Unix) line endings -- GitHub Releases preserves these
+  # cleanly. CRLF mixed with existing body content was getting collapsed
+  # somewhere in the gh -> GH API round-trip.
+  $section = ($lines -join "`n")
 
-  $existing = gh release view $tag --repo $CUSTOM_REPO --json body --jq '.body' 2>&1
+  $existing = gh release view $tag --repo $CUSTOM_REPO --json body --jq '.body'
   if ($LASTEXITCODE -ne 0) {
     Write-Warning "gh release view failed for $tag in $CUSTOM_REPO. Skipping publish."
     return
   }
   if ($null -eq $existing) { $existing = "" }
+  # Normalize existing body to LF as well so the join is uniform
+  $existing = $existing -replace "`r`n", "`n" -replace "`r", "`n"
 
   $startEsc = [regex]::Escape($startMarker)
   $endEsc   = [regex]::Escape($endMarker)
-  $pattern  = "$startEsc[\s\S]*?$endEsc\r?\n?"
+  $pattern  = "$startEsc[\s\S]*?$endEsc\n?"
   if ([regex]::IsMatch($existing, $pattern)) {
     $new = [regex]::Replace($existing, $pattern, $section, 1)
     Write-Host "  replacing existing section for $modelName" -ForegroundColor DarkGray
@@ -544,7 +548,8 @@ if ($PublishToRelease) {
   }
 
   $notesFile = Join-Path $WorkDir ("release-notes-$tag.md")
-  $new | Out-File -FilePath $notesFile -Encoding utf8 -NoNewline
+  # Use [IO.File]::WriteAllText to guarantee no BOM and exact bytes
+  [System.IO.File]::WriteAllText($notesFile, $new, [System.Text.UTF8Encoding]::new($false))
 
   gh release edit $tag --repo $CUSTOM_REPO --notes-file $notesFile
   if ($LASTEXITCODE -ne 0) {
