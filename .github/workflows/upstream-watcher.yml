@@ -1,0 +1,60 @@
+name: Upstream release watcher
+
+# Polls ggml-org/llama.cpp for the latest stable release. If we have not
+# already built that tag (no `upstream-<tag>` git tag in this repo), trigger
+# build.yml via workflow_dispatch with llama_ref pinned to the release tag.
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: upstream-watcher
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve latest upstream release tag
+        id: upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag=$(gh api repos/ggml-org/llama.cpp/releases/latest --jq '.tag_name')
+          if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+            echo "No upstream release found" >&2
+            exit 1
+          fi
+          echo "Latest upstream release: $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether upstream tag has already been built
+        id: built
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ steps.upstream.outputs.tag }}"
+          marker="upstream-$tag"
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$marker" >/dev/null 2>&1; then
+            echo "Already built ($marker exists). Nothing to do."
+            echo "built=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Not yet built. Will trigger build.yml with llama_ref=$tag."
+            echo "built=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Trigger build.yml
+        if: steps.built.outputs.built == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run build.yml \
+            --ref main \
+            -f llama_ref="${{ steps.upstream.outputs.tag }}"
+          echo "Dispatched build for upstream tag ${{ steps.upstream.outputs.tag }}"

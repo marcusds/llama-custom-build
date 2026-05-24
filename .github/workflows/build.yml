@@ -18,8 +18,8 @@ on:
         type: boolean
 
 concurrency:
-  group: build-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.event_name == 'workflow_dispatch' && format('build-dispatch-{0}', github.event.inputs.llama_ref) || format('build-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 permissions:
   contents: write
@@ -177,14 +177,35 @@ jobs:
           path: artifacts/
           retention-days: 30
 
+      - name: Decide release metadata
+        id: rel
+        shell: pwsh
+        run: |
+          $ref = "${{ steps.resolve.outputs.ref }}"
+          $short = "${{ steps.upstream.outputs.short }}"
+          $event = "${{ github.event_name }}"
+          $isUpstreamTag = ($ref -ne "master" -and $ref -ne "" -and $event -eq "workflow_dispatch")
+          if ($isUpstreamTag) {
+            "tag=upstream-$ref" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "name=llama.cpp upstream $ref (sm_120 + Zen 5)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "make_release=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } elseif ($event -eq "schedule") {
+            "tag=build-$short" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "name=Auto-build @ $short" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "make_release=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            "make_release=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
+
       - name: Create Release
-        if: github.event_name == 'schedule'
+        if: steps.rel.outputs.make_release == 'true'
         uses: softprops/action-gh-release@v3.0.0
         with:
-          tag_name: build-${{ steps.upstream.outputs.short }}
-          name: "Auto-build @ ${{ steps.upstream.outputs.short }}"
+          tag_name: ${{ steps.rel.outputs.tag }}
+          name: ${{ steps.rel.outputs.name }}
           body: |
             Automated build of [llama.cpp](${{ env.LLAMA_REPO }}) @ `${{ steps.upstream.outputs.sha }}`
+            Upstream ref: `${{ steps.resolve.outputs.ref }}`
 
             **Target hardware:** RTX 5000 (sm_120) + Zen 5
             **CUDA:** 13.x
