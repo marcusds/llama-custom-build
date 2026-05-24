@@ -72,6 +72,32 @@ Scheduled builds also create a **GitHub Release** tagged `build-<sha>`.
 
 ---
 
+## Benchmarking vs upstream
+
+`scripts/bench-compare.ps1` downloads the latest CUDA Windows release from both
+**ggml-org/llama.cpp** (official fat-binary) and **this repo** (sm_120 + Zen 5
+pinned), then runs `llama-bench` on the same model with identical parameters
+and prints a side-by-side comparison.
+
+Requires `gh` CLI authenticated and a GGUF model on disk.
+
+```powershell
+# Default: pp512 + tg128, 5 reps, -ngl 999, latest releases of both repos
+.\scripts\bench-compare.ps1 -Model C:\models\qwen2.5-7b-q4km.gguf
+
+# Custom prompt/gen sweep
+.\scripts\bench-compare.ps1 -Model model.gguf -Pp "128,512,2048" -Tg "64,128"
+
+# Pin a specific custom release tag
+.\scripts\bench-compare.ps1 -Model model.gguf -CustomTag build-abc1234567
+```
+
+Builds are cached under `bench-work/`; pass `-Refresh` to re-download. Each
+run also writes a timestamped `compare-*.json` with full llama-bench output
+from both binaries plus the comparison rows.
+
+---
+
 ## Runtime tip (Windows)
 
 For best throughput when using `llama-server` or `llama-cli`:
