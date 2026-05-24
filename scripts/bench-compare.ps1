@@ -125,6 +125,9 @@ param(
   [string]$CtkType = "",
   [string]$CtvType = "",
   [int]$FlashAttn = 1,
+  [string]$Depth = "",
+  [switch]$LockGpuClocks,
+  [int]$LockGpuClock = 2520,
   [string]$WorkDir = "bench-work",
   [switch]$Refresh,
   [switch]$PublishToRelease,
@@ -259,6 +262,7 @@ function Invoke-Bench {
   if ($CtkType)          { $extraArgs += @('-ctk', $CtkType) }
   if ($CtvType)          { $extraArgs += @('-ctv', $CtvType) }
   if ($FlashAttn -ge 0)  { $extraArgs += @('-fa',  "$FlashAttn") }
+  if ($Depth)            { $extraArgs += @('-d',   $Depth) }
 
   $argDisplay = "-m <model> -p $Pp -n $Tg -r $Reps -ngl $NGL"
   if ($extraArgs.Count) { $argDisplay += ' ' + ($extraArgs -join ' ') }
@@ -370,6 +374,20 @@ Write-Host "Running benchmarks on $($targets.Count) targets ..." -ForegroundColo
 Write-Host "  Model: $Model"
 Write-Host ""
 
+$gpuClocksLocked = $false
+if ($LockGpuClocks) {
+  if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
+    Write-Host "Locking GPU clocks to $LockGpuClock MHz (requires admin) ..." -ForegroundColor Cyan
+    & nvidia-smi -lgc "$LockGpuClock,$LockGpuClock" 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+    if ($LASTEXITCODE -eq 0) { $gpuClocksLocked = $true }
+    else { Write-Host "  GPU clock lock failed (run elevated for stable bench)." -ForegroundColor Yellow }
+  } else {
+    Write-Host "nvidia-smi not on PATH; skipping GPU clock lock." -ForegroundColor Yellow
+  }
+}
+
+try {
+
 foreach ($t in $targets) {
   Write-Host "[$($t.Label) :: $($t.Tag)]" -ForegroundColor Yellow
   $all = @()
@@ -381,6 +399,13 @@ foreach ($t in $targets) {
   }
   $t | Add-Member -NotePropertyName Results -NotePropertyValue $all
   Write-Host ""
+}
+
+} finally {
+  if ($gpuClocksLocked) {
+    Write-Host "Restoring GPU clocks ..." -ForegroundColor Cyan
+    & nvidia-smi -rgc 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+  }
 }
 
 # ---------- Compare ----------

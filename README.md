@@ -34,7 +34,9 @@ head-to-head:
 | `GGML_CUDA_NCCL` | Default `ON` | **OFF** (single-GPU rig) | **OFF** (single-GPU rig) |
 | `GGML_CUDA_FA` | `ON` | `ON` | `ON` |
 | `GGML_CUDA_FORCE_MMQ` | `OFF` | **`ON`** (forces MMQ over cuBLAS for Q-quants) | **`ON`** |
-| `GGML_CUDA_FA_ALL_QUANTS` | `OFF` | `OFF` | `OFF` |
+| `GGML_CUDA_FA_ALL_QUANTS` | `OFF` | **`ON`** (fused FA for all KV-quant combos) | **`ON`** |
+| `GGML_CUDA_GRAPHS` | `OFF` (default) | **`ON`** (cuts decode launch overhead) | **`ON`** |
+| `CMAKE_CUDA_FLAGS` (ptxas) | default | `-Xptxas=-O3 -Xptxas=-dlcm=ca` | `-Xptxas=-O3 -Xptxas=-dlcm=ca` |
 | `GGML_CUDA_COMPRESSION_MODE` | unset | `size` | `size` |
 | `LLAMA_BUILD_UI` | `ON` (downloads HF UI assets) | **OFF** | **OFF** |
 | `LLAMA_BUILD_APP` | `ON` (unified `llama` binary) | **OFF** | **OFF** |
