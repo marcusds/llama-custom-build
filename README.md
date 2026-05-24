@@ -123,32 +123,50 @@ tag) also create a **GitHub Release** tagged `upstream-<tag>` (e.g.
 
 ## Benchmarking vs upstream
 
-`scripts/bench-compare.ps1` downloads the latest CUDA Windows release from both
-**ggml-org/llama.cpp** (official fat-binary) and **this repo** (sm_120 + Zen 5
-pinned), then runs `llama-bench` on the same model with identical parameters
-and prints a side-by-side comparison.
+`scripts/bench-compare.ps1` resolves three `llama-bench` targets and runs each
+on the same model with identical parameters, then prints a side-by-side
+throughput table with delta % vs the **official** baseline:
+
+  | Target | Default source |
+  |---|---|
+  | `official` | latest CUDA-13 Windows asset from `ggml-org/llama.cpp` |
+  | `msvc`     | latest `*win-x64-msvc-*.zip` from `marcusds/llama-custom-build` |
+  | `clang`    | latest `*win-x64-clang-*.zip` from `marcusds/llama-custom-build` |
 
 Requires `gh` CLI authenticated. If `-Model` is omitted, the script downloads
 `Qwen3.5-9B-UD-Q4_K_XL.gguf` from Hugging Face into `bench-work/models/` on
 first run and reuses it afterward.
 
 ```powershell
-# Easiest: no args, auto-downloads default Qwen3.5-9B model
+# Default: 3-way bench (official + msvc + clang from releases)
 .\scripts\bench-compare.ps1
 
 # Bring your own model
 .\scripts\bench-compare.ps1 -Model C:\models\qwen2.5-7b-q4km.gguf
 
+# Bench local build folders instead of downloading from releases
+.\scripts\bench-compare.ps1 `
+  -CustomMsvcPath  D:\local\msvc\bin `
+  -CustomClangPath D:\local\clang\bin
+
+# Skip official, just compare msvc vs clang
+.\scripts\bench-compare.ps1 -SkipOfficial
+
 # Custom prompt/gen sweep
 .\scripts\bench-compare.ps1 -Pp "128,512,2048" -Tg "64,128"
 
-# Pin a specific custom release tag
-.\scripts\bench-compare.ps1 -CustomTag build-abc1234567
+# Pin specific release tags
+.\scripts\bench-compare.ps1 -CustomTag upstream-b9297
 ```
 
+`-CustomMsvcPath` / `-CustomClangPath` point to folders containing
+`llama-bench.exe` (searched recursively); when set, the script skips the
+GitHub download for that target. `-SkipOfficial` / `-SkipMsvc` / `-SkipClang`
+drop a target from the run. At least two targets are required.
+
 Builds are cached under `bench-work/`; pass `-Refresh` to re-download. Each
-run also writes a timestamped `compare-*.json` with full llama-bench output
-from both binaries plus the comparison rows.
+run writes `bench-work/compare-<timestamp>.json` with the full llama-bench
+output from every target plus the comparison rows.
 
 ---
 

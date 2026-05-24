@@ -1,32 +1,55 @@
 <#
 .SYNOPSIS
-  Benchmark this repo's llama.cpp build vs the official ggml-org/llama.cpp CUDA Windows build.
+  Benchmark this repo's MSVC + ClangCL builds vs the official ggml-org/llama.cpp CUDA Windows build.
 
 .DESCRIPTION
-  Downloads the latest CUDA Windows release artifact from:
-    1. ggml-org/llama.cpp  (official upstream, fat-binary)
-    2. marcusds/llama-custom-build  (this repo, pinned to sm_120 + Zen 5)
+  Resolves three llama-bench targets and runs them on the same model with
+  identical parameters. By default each non-local target is downloaded from
+  the latest CUDA Windows GitHub release of the corresponding repo:
 
-  Runs `llama-bench` on the same model with identical parameters and emits
-  a side-by-side comparison plus a JSON results file.
+    official    -- ggml-org/llama.cpp           (fat-binary, multi-arch)
+    msvc        -- marcusds/llama-custom-build  (MSVC,    sm_120 + Zen 5, AVX-512)
+    clang       -- marcusds/llama-custom-build  (ClangCL, sm_120 + Zen 5, ThinLTO)
+
+  Use -CustomMsvcPath / -CustomClangPath to point at local build folders
+  instead of downloading from a release (folder must contain llama-bench.exe).
+
+  Output: side-by-side table with three throughput columns + delta % vs
+  official; full JSON results written to bench-work/compare-<timestamp>.json.
 
   Requires:
     - gh CLI authenticated  (`gh auth login`)
     - PowerShell 7+
-    - A local GGUF model file
-    - CUDA-capable GPU (RTX 5000/5090 / sm_120 for the custom build)
+    - A GGUF model file (or rely on auto-download default)
+    - CUDA-capable GPU (RTX 5000/5090 sm_120 for the custom builds)
 
 .PARAMETER Model
-  Path to a GGUF model file. Must be the same model for both builds.
-  If omitted, a default Qwen3.5-9B-UD-Q4_K_XL.gguf is downloaded from
-  Hugging Face into the work directory and reused on subsequent runs.
+  Path to a GGUF model file. Same model for all three targets.
+  Omit to auto-download Qwen3.5-9B-UD-Q4_K_XL.gguf into bench-work/models/.
 
 .PARAMETER OfficialTag
-  Release tag from ggml-org/llama.cpp. Default "latest" picks the newest
-  release that has a CUDA 13.x Windows asset.
+  Release tag from ggml-org/llama.cpp. Default "latest".
 
 .PARAMETER CustomTag
   Release tag from marcusds/llama-custom-build. Default "latest".
+
+.PARAMETER CustomMsvcPath
+  Local folder containing llama-bench.exe for the MSVC custom build. If set,
+  the script skips the GitHub release download for the msvc target.
+
+.PARAMETER CustomClangPath
+  Local folder containing llama-bench.exe for the ClangCL custom build. If
+  set, the script skips the GitHub release download for the clang target.
+
+.PARAMETER SkipOfficial
+  Don't bench the official upstream build. Useful for quick msvc-vs-clang
+  comparisons.
+
+.PARAMETER SkipMsvc
+  Don't bench the MSVC target.
+
+.PARAMETER SkipClang
+  Don't bench the ClangCL target.
 
 .PARAMETER Pp
   Comma-separated prompt-processing sizes for llama-bench -p. Default "512".
@@ -35,28 +58,40 @@
   Comma-separated token-generation sizes for llama-bench -n. Default "128".
 
 .PARAMETER Reps
-  Repetitions per test (llama-bench -r). Default 5 (matches llama-bench default).
+  Repetitions per test (llama-bench -r). Default 5.
 
 .PARAMETER NGL
-  GPU layers to offload (-ngl). Default 999 (offload everything).
+  GPU layers to offload (-ngl). Default 999.
 
 .PARAMETER WorkDir
-  Where build zips are downloaded + extracted. Default "bench-work" in CWD.
+  Download + extract cache. Default "bench-work" in CWD.
 
 .PARAMETER Refresh
-  Re-download builds even if already cached locally.
+  Re-download builds even if cached.
 
 .EXAMPLE
-  .\scripts\bench-compare.ps1 -Model C:\models\qwen2.5-7b-q4km.gguf
+  # Default: 3-way bench (official + custom msvc + custom clang from releases)
+  .\scripts\bench-compare.ps1
 
 .EXAMPLE
-  .\scripts\bench-compare.ps1 -Model model.gguf -Pp "128,512,2048" -Tg "64,128"
+  # Bench against local builds (skip downloads)
+  .\scripts\bench-compare.ps1 `
+    -CustomMsvcPath  D:\builds\msvc\bin `
+    -CustomClangPath D:\builds\clang\bin
+
+.EXAMPLE
+  # Skip official, just msvc vs clang
+  .\scripts\bench-compare.ps1 -SkipOfficial -Pp "128,512,2048" -Tg "64,128"
 #>
 param(
   [string]$Model = "",
   [string]$OfficialTag = "latest",
   [string]$CustomTag = "latest",
-  [ValidateSet("msvc","clang")][string]$Compiler = "msvc",
+  [string]$CustomMsvcPath = "",
+  [string]$CustomClangPath = "",
+  [switch]$SkipOfficial,
+  [switch]$SkipMsvc,
+  [switch]$SkipClang,
   [string]$Pp = "512",
   [string]$Tg = "128",
   [int]$Reps = 5,
@@ -79,7 +114,9 @@ function Assert-Tool {
   }
 }
 
-Assert-Tool "gh"
+# gh only needed if at least one target is from a release
+$needsGh = (-not $SkipOfficial) -or (-not $SkipMsvc -and -not $CustomMsvcPath) -or (-not $SkipClang -and -not $CustomClangPath)
+if ($needsGh) { Assert-Tool "gh" }
 Assert-Tool "curl.exe"
 
 # Resolve work dir early so we can place the default model into it
@@ -107,17 +144,11 @@ if ([string]::IsNullOrWhiteSpace($Model)) {
   }
 }
 
-if (-not (Test-Path $Model)) {
-  throw "Model file not found: $Model"
-}
+if (-not (Test-Path $Model)) { throw "Model file not found: $Model" }
 $Model = (Resolve-Path $Model).Path
 
 function Find-ReleaseAsset {
-  param(
-    [string]$Repo,
-    [string]$Tag,
-    [string]$AssetGlob   # PowerShell -like wildcard pattern
-  )
+  param([string]$Repo, [string]$Tag, [string]$AssetGlob)
 
   if ($Tag -eq "latest") {
     $releases = gh release list --repo $Repo --limit 25 --json tagName,isDraft,isPrerelease,publishedAt | ConvertFrom-Json
@@ -127,10 +158,8 @@ function Find-ReleaseAsset {
       $asset = $view.assets | Where-Object { $_.name -like $AssetGlob } | Select-Object -First 1
       if ($asset) {
         return [PSCustomObject]@{
-          Tag       = $view.tagName
-          Published = $view.publishedAt
-          AssetName = $asset.name
-          AssetSize = $asset.size
+          Tag = $view.tagName; Published = $view.publishedAt
+          AssetName = $asset.name; AssetSize = $asset.size
         }
       }
     }
@@ -138,25 +167,24 @@ function Find-ReleaseAsset {
   } else {
     $view = gh release view $Tag --repo $Repo --json assets,tagName,publishedAt | ConvertFrom-Json
     $asset = $view.assets | Where-Object { $_.name -like $AssetGlob } | Select-Object -First 1
-    if (-not $asset) {
-      throw "No asset matching '$AssetGlob' in $Repo $Tag"
-    }
+    if (-not $asset) { throw "No asset matching '$AssetGlob' in $Repo $Tag" }
     return [PSCustomObject]@{
-      Tag       = $view.tagName
-      Published = $view.publishedAt
-      AssetName = $asset.name
-      AssetSize = $asset.size
+      Tag = $view.tagName; Published = $view.publishedAt
+      AssetName = $asset.name; AssetSize = $asset.size
     }
   }
 }
 
+function Resolve-BenchFromPath {
+  param([string]$Label, [string]$Path)
+  if (-not (Test-Path $Path)) { throw "$Label path does not exist: $Path" }
+  $bench = Get-ChildItem -Path $Path -Recurse -Filter "llama-bench.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $bench) { throw "llama-bench.exe not found under $Label path: $Path" }
+  return $bench.FullName
+}
+
 function Ensure-Build {
-  param(
-    [string]$Repo,
-    [string]$Tag,
-    [string]$AssetName,
-    [string]$Dest
-  )
+  param([string]$Repo, [string]$Tag, [string]$AssetName, [string]$Dest)
 
   if ((Test-Path $Dest) -and -not $Refresh) {
     $bench = Get-ChildItem -Path $Dest -Recurse -Filter "llama-bench.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -179,27 +207,17 @@ function Ensure-Build {
   Remove-Item $zip
 
   $bench = Get-ChildItem -Path $Dest -Recurse -Filter "llama-bench.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-  if (-not $bench) {
-    throw "llama-bench.exe not found after extracting $AssetName"
-  }
+  if (-not $bench) { throw "llama-bench.exe not found after extracting $AssetName" }
   return $bench.FullName
 }
 
 function Invoke-Bench {
-  param(
-    [string]$Label,
-    [string]$BenchExe,
-    [string]$ModelPath
-  )
+  param([string]$Label, [string]$BenchExe, [string]$ModelPath)
 
   $benchDir = Split-Path -Parent $BenchExe
-
-  # Ensure CUDA + bench-local DLLs are findable
   $oldPath = $env:PATH
   $env:PATH = "$benchDir;$env:PATH"
-  if ($env:CUDA_PATH) {
-    $env:PATH = "$($env:CUDA_PATH)\bin;$env:PATH"
-  }
+  if ($env:CUDA_PATH) { $env:PATH = "$($env:CUDA_PATH)\bin;$env:PATH" }
 
   $jsonFile = Join-Path $WorkDir ("bench-$Label.json")
   $logFile  = Join-Path $WorkDir ("bench-$Label.log")
@@ -207,15 +225,7 @@ function Invoke-Bench {
   Write-Host "  running: $BenchExe" -ForegroundColor DarkGray
   Write-Host "  args:    -m <model> -p $Pp -n $Tg -r $Reps -ngl $NGL -o json" -ForegroundColor DarkGray
 
-  # llama-bench emits JSON to stdout; capture
-  $output = & $BenchExe `
-    -m $ModelPath `
-    -p $Pp `
-    -n $Tg `
-    -r $Reps `
-    -ngl $NGL `
-    -o json 2>&1
-
+  $output = & $BenchExe -m $ModelPath -p $Pp -n $Tg -r $Reps -ngl $NGL -o json 2>&1
   $env:PATH = $oldPath
 
   if ($LASTEXITCODE -ne 0) {
@@ -223,7 +233,6 @@ function Invoke-Bench {
     throw "llama-bench '$Label' failed (exit $LASTEXITCODE). See $logFile"
   }
 
-  # Stdout may contain non-JSON warnings before the JSON array. Trim to '['..']'.
   $text = ($output | Out-String)
   $start = $text.IndexOf('[')
   $end   = $text.LastIndexOf(']')
@@ -233,7 +242,6 @@ function Invoke-Bench {
   }
   $jsonText = $text.Substring($start, $end - $start + 1)
   $jsonText | Out-File -FilePath $jsonFile -Encoding utf8
-
   return ($jsonText | ConvertFrom-Json)
 }
 
@@ -244,68 +252,144 @@ function Get-TestLabel {
   else                                                       { return "pp$($Record.n_prompt)+tg$($Record.n_gen)" }
 }
 
-# ---------- Run ----------
+# ---------- Build target list ----------
+
+$targets = @()
+
+if (-not $SkipOfficial) {
+  Write-Host ""
+  Write-Host "Resolving official ($OFFICIAL_REPO) ..." -ForegroundColor Cyan
+  $asset = Find-ReleaseAsset -Repo $OFFICIAL_REPO -Tag $OfficialTag -AssetGlob "*cuda-13*-x64.zip"
+  Write-Host "  -> $($asset.Tag) :: $($asset.AssetName) ($([math]::Round($asset.AssetSize / 1MB, 1)) MB)" -ForegroundColor Gray
+  $dest = Join-Path $WorkDir "official-$($asset.Tag)"
+  $bench = Ensure-Build -Repo $OFFICIAL_REPO -Tag $asset.Tag -AssetName $asset.AssetName -Dest $dest
+  $targets += [PSCustomObject]@{
+    Label = "official"; Tag = $asset.Tag; Published = $asset.Published
+    Asset = $asset.AssetName; Bench = $bench; Source = "release"; Repo = $OFFICIAL_REPO
+  }
+}
+
+if (-not $SkipMsvc) {
+  if ($CustomMsvcPath) {
+    Write-Host ""
+    Write-Host "Resolving msvc (local path) ..." -ForegroundColor Cyan
+    Write-Host "  -> $CustomMsvcPath" -ForegroundColor Gray
+    $bench = Resolve-BenchFromPath -Label "msvc" -Path $CustomMsvcPath
+    $targets += [PSCustomObject]@{
+      Label = "msvc"; Tag = "local"; Published = ""
+      Asset = ""; Bench = $bench; Source = "local"; Repo = $CustomMsvcPath
+    }
+  } else {
+    Write-Host ""
+    Write-Host "Resolving msvc ($CUSTOM_REPO) ..." -ForegroundColor Cyan
+    $asset = Find-ReleaseAsset -Repo $CUSTOM_REPO -Tag $CustomTag -AssetGlob "*win-x64-msvc-*.zip"
+    Write-Host "  -> $($asset.Tag) :: $($asset.AssetName) ($([math]::Round($asset.AssetSize / 1MB, 1)) MB)" -ForegroundColor Gray
+    $dest = Join-Path $WorkDir "custom-msvc-$($asset.Tag)"
+    $bench = Ensure-Build -Repo $CUSTOM_REPO -Tag $asset.Tag -AssetName $asset.AssetName -Dest $dest
+    $targets += [PSCustomObject]@{
+      Label = "msvc"; Tag = $asset.Tag; Published = $asset.Published
+      Asset = $asset.AssetName; Bench = $bench; Source = "release"; Repo = $CUSTOM_REPO
+    }
+  }
+}
+
+if (-not $SkipClang) {
+  if ($CustomClangPath) {
+    Write-Host ""
+    Write-Host "Resolving clang (local path) ..." -ForegroundColor Cyan
+    Write-Host "  -> $CustomClangPath" -ForegroundColor Gray
+    $bench = Resolve-BenchFromPath -Label "clang" -Path $CustomClangPath
+    $targets += [PSCustomObject]@{
+      Label = "clang"; Tag = "local"; Published = ""
+      Asset = ""; Bench = $bench; Source = "local"; Repo = $CustomClangPath
+    }
+  } else {
+    Write-Host ""
+    Write-Host "Resolving clang ($CUSTOM_REPO) ..." -ForegroundColor Cyan
+    $asset = Find-ReleaseAsset -Repo $CUSTOM_REPO -Tag $CustomTag -AssetGlob "*win-x64-clang-*.zip"
+    Write-Host "  -> $($asset.Tag) :: $($asset.AssetName) ($([math]::Round($asset.AssetSize / 1MB, 1)) MB)" -ForegroundColor Gray
+    $dest = Join-Path $WorkDir "custom-clang-$($asset.Tag)"
+    $bench = Ensure-Build -Repo $CUSTOM_REPO -Tag $asset.Tag -AssetName $asset.AssetName -Dest $dest
+    $targets += [PSCustomObject]@{
+      Label = "clang"; Tag = $asset.Tag; Published = $asset.Published
+      Asset = $asset.AssetName; Bench = $bench; Source = "release"; Repo = $CUSTOM_REPO
+    }
+  }
+}
+
+if ($targets.Count -lt 2) {
+  throw "Need at least two targets to compare. Got $($targets.Count)."
+}
+
+# ---------- Run all benches ----------
 
 Write-Host ""
-Write-Host "Resolving releases ..." -ForegroundColor Cyan
-Write-Host "  official ($OFFICIAL_REPO) ..." -ForegroundColor Cyan
-$official = Find-ReleaseAsset -Repo $OFFICIAL_REPO -Tag $OfficialTag -AssetGlob "*cuda-13*-x64.zip"
-Write-Host "    -> $($official.Tag) :: $($official.AssetName) ($([math]::Round($official.AssetSize / 1MB, 1)) MB)" -ForegroundColor Gray
-
-Write-Host "  custom   ($CUSTOM_REPO, $Compiler) ..." -ForegroundColor Cyan
-$custom = Find-ReleaseAsset -Repo $CUSTOM_REPO -Tag $CustomTag -AssetGlob "*win-x64-$Compiler-*.zip"
-Write-Host "    -> $($custom.Tag) :: $($custom.AssetName) ($([math]::Round($custom.AssetSize / 1MB, 1)) MB)" -ForegroundColor Gray
-
-$officialDir = Join-Path $WorkDir "official-$($official.Tag)"
-$customDir   = Join-Path $WorkDir "custom-$($custom.Tag)"
-
-Write-Host ""
-Write-Host "Preparing builds ..." -ForegroundColor Cyan
-Write-Host "  official ..." -ForegroundColor Cyan
-$officialBench = Ensure-Build -Repo $OFFICIAL_REPO -Tag $official.Tag -AssetName $official.AssetName -Dest $officialDir
-Write-Host "  custom ..." -ForegroundColor Cyan
-$customBench   = Ensure-Build -Repo $CUSTOM_REPO   -Tag $custom.Tag   -AssetName $custom.AssetName   -Dest $customDir
-
-Write-Host ""
-Write-Host "Running benchmarks ..." -ForegroundColor Cyan
+Write-Host "Running benchmarks on $($targets.Count) targets ..." -ForegroundColor Cyan
 Write-Host "  Model: $Model"
 Write-Host ""
 
-Write-Host "[official $($official.Tag)]" -ForegroundColor Yellow
-$officialResults = Invoke-Bench -Label "official-$($official.Tag)" -BenchExe $officialBench -ModelPath $Model
-
-Write-Host ""
-Write-Host "[custom $($custom.Tag)]" -ForegroundColor Yellow
-$customResults = Invoke-Bench -Label "custom-$($custom.Tag)" -BenchExe $customBench -ModelPath $Model
+foreach ($t in $targets) {
+  Write-Host "[$($t.Label) :: $($t.Tag)]" -ForegroundColor Yellow
+  $t | Add-Member -NotePropertyName Results -NotePropertyValue (Invoke-Bench -Label "$($t.Label)-$($t.Tag)" -BenchExe $t.Bench -ModelPath $Model)
+  Write-Host ""
+}
 
 # ---------- Compare ----------
 
-$rows = @()
-foreach ($o in $officialResults) {
-  $label = Get-TestLabel -Record $o
-  $c = $customResults | Where-Object {
-    $_.n_prompt -eq $o.n_prompt -and $_.n_gen -eq $o.n_gen
-  } | Select-Object -First 1
-  if (-not $c) { continue }
-  $oTs = [double]$o.avg_ts
-  $cTs = [double]$c.avg_ts
-  $delta = if ($oTs -gt 0) { (($cTs - $oTs) / $oTs) * 100.0 } else { 0.0 }
-  $rows += [PSCustomObject]@{
-    Test            = $label
-    "Official t/s"  = [math]::Round($oTs, 2)
-    "Custom t/s"    = [math]::Round($cTs, 2)
-    "Delta %"       = ("{0:+0.00;-0.00; 0.00}" -f $delta)
-    "Official sd"   = [math]::Round([double]$o.stddev_ts, 2)
-    "Custom sd"     = [math]::Round([double]$c.stddev_ts, 2)
+# Use the first target as the baseline for delta %. Prefer official; otherwise first listed.
+$baseline = $targets | Where-Object { $_.Label -eq 'official' } | Select-Object -First 1
+if (-not $baseline) { $baseline = $targets[0] }
+
+# Collect every (n_prompt, n_gen) pair across all targets
+$allTests = @{}
+foreach ($t in $targets) {
+  foreach ($r in $t.Results) {
+    $key = "$($r.n_prompt)|$($r.n_gen)"
+    if (-not $allTests.ContainsKey($key)) {
+      $allTests[$key] = [PSCustomObject]@{
+        Label = Get-TestLabel -Record $r
+        n_prompt = $r.n_prompt
+        n_gen = $r.n_gen
+      }
+    }
   }
+}
+
+$rows = @()
+foreach ($k in ($allTests.Keys | Sort-Object)) {
+  $meta = $allTests[$k]
+  $row = [ordered]@{ Test = $meta.Label }
+  $baselineTs = $null
+  foreach ($t in $targets) {
+    $rec = $t.Results | Where-Object { $_.n_prompt -eq $meta.n_prompt -and $_.n_gen -eq $meta.n_gen } | Select-Object -First 1
+    $ts = if ($rec) { [math]::Round([double]$rec.avg_ts, 2) } else { $null }
+    $row["$($t.Label) t/s"] = $ts
+    if ($t.Label -eq $baseline.Label) { $baselineTs = if ($rec) { [double]$rec.avg_ts } else { $null } }
+  }
+  if ($baselineTs -gt 0) {
+    foreach ($t in $targets) {
+      if ($t.Label -eq $baseline.Label) { continue }
+      $rec = $t.Results | Where-Object { $_.n_prompt -eq $meta.n_prompt -and $_.n_gen -eq $meta.n_gen } | Select-Object -First 1
+      if ($rec) {
+        $delta = (([double]$rec.avg_ts - $baselineTs) / $baselineTs) * 100.0
+        $row["$($t.Label) vs $($baseline.Label)"] = ("{0:+0.00;-0.00; 0.00}%" -f $delta)
+      } else {
+        $row["$($t.Label) vs $($baseline.Label)"] = "-"
+      }
+    }
+  }
+  $rows += [PSCustomObject]$row
 }
 
 Write-Host ""
 Write-Host "================ BENCHMARK COMPARISON ================" -ForegroundColor Cyan
 Write-Host "Model:    $Model"
-Write-Host "Official: $($official.Tag)  (published $($official.Published))"
-Write-Host "Custom:   $($custom.Tag)  (published $($custom.Published))"
+foreach ($t in $targets) {
+  $src = if ($t.Source -eq 'local') { "local: $($t.Repo)" } else { "$($t.Repo) @ $($t.Tag)" }
+  Write-Host ("{0,-10}{1}" -f $t.Label, $src)
+}
 Write-Host "Reps:     $Reps   |  NGL: $NGL"
+Write-Host "Baseline for delta %: $($baseline.Label)"
 Write-Host ""
 $rows | Format-Table -AutoSize
 
@@ -317,19 +401,11 @@ $outFile = Join-Path $WorkDir ("compare-$(Get-Date -Format 'yyyyMMdd-HHmmss').js
   ngl      = $NGL
   pp       = $Pp
   tg       = $Tg
-  official = @{
-    repo      = $OFFICIAL_REPO
-    tag       = $official.Tag
-    published = $official.Published
-    asset     = $official.AssetName
-    results   = $officialResults
-  }
-  custom   = @{
-    repo      = $CUSTOM_REPO
-    tag       = $custom.Tag
-    published = $custom.Published
-    asset     = $custom.AssetName
-    results   = $customResults
+  baseline = $baseline.Label
+  targets  = $targets | ForEach-Object {
+    @{ label = $_.Label; tag = $_.Tag; published = $_.Published
+       source = $_.Source; repo = $_.Repo; asset = $_.Asset
+       bench_exe = $_.Bench; results = $_.Results }
   }
   comparison = $rows
 } | ConvertTo-Json -Depth 12 | Set-Content -Path $outFile -Encoding utf8
