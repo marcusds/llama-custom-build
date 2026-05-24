@@ -58,7 +58,13 @@
   Comma-separated token-generation sizes for llama-bench -n. Default "128".
 
 .PARAMETER Reps
-  Repetitions per test (llama-bench -r). Default 5.
+  Repetitions per test within a single llama-bench process (-r flag).
+  Default 5. Captures intra-process variance; llama-bench reports avg + stddev.
+
+.PARAMETER Runs
+  How many times to invoke llama-bench per target. Each Run is a fresh
+  process so inter-process variance (CUDA init, GPU thermal, scheduler
+  drift) is captured. Default 3. Total samples per test = Runs * Reps.
 
 .PARAMETER NGL
   GPU layers to offload (-ngl). Default 999.
@@ -95,6 +101,7 @@ param(
   [string]$Pp = "512",
   [string]$Tg = "128",
   [int]$Reps = 5,
+  [int]$Runs = 3,
   [int]$NGL = 999,
   [string]$WorkDir = "bench-work",
   [switch]$Refresh
@@ -330,7 +337,14 @@ Write-Host ""
 
 foreach ($t in $targets) {
   Write-Host "[$($t.Label) :: $($t.Tag)]" -ForegroundColor Yellow
-  $t | Add-Member -NotePropertyName Results -NotePropertyValue (Invoke-Bench -Label "$($t.Label)-$($t.Tag)" -BenchExe $t.Bench -ModelPath $Model)
+  $all = @()
+  for ($i = 1; $i -le $Runs; $i++) {
+    Write-Host "  run $i / $Runs" -ForegroundColor DarkGray
+    $r = Invoke-Bench -Label "$($t.Label)-$($t.Tag)-run$i" -BenchExe $t.Bench -ModelPath $Model
+    foreach ($rec in $r) { $rec | Add-Member -NotePropertyName outer_run -NotePropertyValue $i -Force }
+    $all += $r
+  }
+  $t | Add-Member -NotePropertyName Results -NotePropertyValue $all
   Write-Host ""
 }
 
@@ -355,23 +369,46 @@ foreach ($t in $targets) {
   }
 }
 
+function Get-MeanTs {
+  param($Records)
+  if (-not $Records -or $Records.Count -eq 0) { return $null }
+  $vals = $Records | ForEach-Object { [double]$_.avg_ts }
+  return ($vals | Measure-Object -Average).Average
+}
+
+function Get-StdTs {
+  param($Records)
+  if (-not $Records -or $Records.Count -lt 2) { return $null }
+  $vals = $Records | ForEach-Object { [double]$_.avg_ts }
+  $mean = ($vals | Measure-Object -Average).Average
+  $sumSq = 0.0
+  foreach ($v in $vals) { $sumSq += [Math]::Pow($v - $mean, 2) }
+  return [Math]::Sqrt($sumSq / ($vals.Count - 1))
+}
+
 $rows = @()
 foreach ($k in ($allTests.Keys | Sort-Object)) {
   $meta = $allTests[$k]
   $row = [ordered]@{ Test = $meta.Label }
-  $baselineTs = $null
+  $baselineMean = $null
   foreach ($t in $targets) {
-    $rec = $t.Results | Where-Object { $_.n_prompt -eq $meta.n_prompt -and $_.n_gen -eq $meta.n_gen } | Select-Object -First 1
-    $ts = if ($rec) { [math]::Round([double]$rec.avg_ts, 2) } else { $null }
-    $row["$($t.Label) t/s"] = $ts
-    if ($t.Label -eq $baseline.Label) { $baselineTs = if ($rec) { [double]$rec.avg_ts } else { $null } }
+    $recs = @($t.Results | Where-Object { $_.n_prompt -eq $meta.n_prompt -and $_.n_gen -eq $meta.n_gen })
+    $mean = Get-MeanTs -Records $recs
+    $sd   = Get-StdTs  -Records $recs
+    if ($mean -ne $null) {
+      $row["$($t.Label) t/s"] = ("{0:N2} +-{1:N2}" -f $mean, ([double]($sd | ForEach-Object { if ($_) { $_ } else { 0 } })))
+    } else {
+      $row["$($t.Label) t/s"] = "-"
+    }
+    if ($t.Label -eq $baseline.Label) { $baselineMean = $mean }
   }
-  if ($baselineTs -gt 0) {
+  if ($baselineMean -gt 0) {
     foreach ($t in $targets) {
       if ($t.Label -eq $baseline.Label) { continue }
-      $rec = $t.Results | Where-Object { $_.n_prompt -eq $meta.n_prompt -and $_.n_gen -eq $meta.n_gen } | Select-Object -First 1
-      if ($rec) {
-        $delta = (([double]$rec.avg_ts - $baselineTs) / $baselineTs) * 100.0
+      $recs = @($t.Results | Where-Object { $_.n_prompt -eq $meta.n_prompt -and $_.n_gen -eq $meta.n_gen })
+      $mean = Get-MeanTs -Records $recs
+      if ($mean -ne $null) {
+        $delta = (($mean - $baselineMean) / $baselineMean) * 100.0
         $row["$($t.Label) vs $($baseline.Label)"] = ("{0:+0.00;-0.00; 0.00}%" -f $delta)
       } else {
         $row["$($t.Label) vs $($baseline.Label)"] = "-"
@@ -388,7 +425,8 @@ foreach ($t in $targets) {
   $src = if ($t.Source -eq 'local') { "local: $($t.Repo)" } else { "$($t.Repo) @ $($t.Tag)" }
   Write-Host ("{0,-10}{1}" -f $t.Label, $src)
 }
-Write-Host "Reps:     $Reps   |  NGL: $NGL"
+Write-Host "Reps:     $Reps (intra-process)  |  Runs: $Runs (fresh processes)  |  NGL: $NGL"
+Write-Host "Total samples per test: $($Reps * $Runs)"
 Write-Host "Baseline for delta %: $($baseline.Label)"
 Write-Host ""
 $rows | Format-Table -AutoSize
@@ -398,6 +436,7 @@ $outFile = Join-Path $WorkDir ("compare-$(Get-Date -Format 'yyyyMMdd-HHmmss').js
   date     = (Get-Date -Format "o")
   model    = $Model
   reps     = $Reps
+  runs     = $Runs
   ngl      = $NGL
   pp       = $Pp
   tg       = $Tg
