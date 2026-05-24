@@ -397,7 +397,11 @@ function Get-MeanTs {
 
 function Get-StdTs {
   param($Records)
-  if (-not $Records -or $Records.Count -lt 2) { return $null }
+  if (-not $Records -or $Records.Count -eq 0) { return $null }
+  if ($Records.Count -eq 1) {
+    # Only one outer-run record; fall back to llama-bench's intra-process stddev
+    return [double]$Records[0].stddev_ts
+  }
   $vals = $Records | ForEach-Object { [double]$_.avg_ts }
   $mean = ($vals | Measure-Object -Average).Average
   $sumSq = 0.0
