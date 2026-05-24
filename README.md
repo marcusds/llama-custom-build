@@ -42,22 +42,22 @@ Builds run automatically every **Sunday at 03:00 UTC**, or trigger manually.
 
 ```cmake
 -DGGML_CUDA=ON
--DCMAKE_CUDA_ARCHITECTURES=120       # RTX 5000 only (sm_120)
+-DCMAKE_CUDA_ARCHITECTURES=120       # RTX 5000/5090 (sm_120)
 -DGGML_AVX=ON
 -DGGML_AVX2=ON
 -DGGML_FMA=ON
 -DGGML_F16C=ON
 -DGGML_AVX_VNNI=ON                   # AVX-VNNI (256-bit, quant dot products)
--DGGML_AVX512=ON
--DGGML_AVX512_VBMI=ON
--DGGML_AVX512_VNNI=ON
--DGGML_AVX512_BF16=ON                # Zen 5 supports AVX512-BF16
+-DGGML_AVX512=OFF                    # disabled: clang-cl C-mode BF16 intrinsic gap
 -DGGML_NATIVE=OFF
--DLLAMA_FLASH_ATTN=ON
 -DBUILD_SHARED_LIBS=ON
--DCMAKE_CXX_FLAGS="/O2 /GL /arch:AVX512"
--DCMAKE_EXE_LINKER_FLAGS="/LTCG"
+-DCMAKE_C_FLAGS="-O3 -march=znver4 -mprefer-vector-width=256 -flto=thin"
+-DCMAKE_CXX_FLAGS="-O3 -march=znver4 -mprefer-vector-width=256 -flto=thin"
+-DCMAKE_EXE_LINKER_FLAGS="-flto=thin"
+-DCMAKE_SHARED_LINKER_FLAGS="-flto=thin"
 ```
+
+Compiler: ClangCL (from VS 2022 LLVM toolset). ThinLTO at link time.
 
 ---
 
@@ -69,19 +69,6 @@ Each successful build uploads a zip containing:
 - `build-info.json` — records upstream commit, date, and flags used
 
 Scheduled builds also create a **GitHub Release** tagged `build-<sha>`.
-
----
-
-## MSVC PGO acceptance criteria
-
-PGO is treated as valid only when all checks pass:
-
-1. Instrumented build completes successfully (`build.ps1 <config> -Action pgo`).
-2. Profiling run produces one or more `*.pgc` files in `build\`.
-3. Optimized rebuild (`PGUpdate=Use`) completes successfully.
-4. One or more `*.pgd` files exist after optimized rebuild.
-
-`build.ps1` now records these checks in each PGO build's `BUILD.md` under **PGO Verification** with PASS/FAIL status.
 
 ---
 
