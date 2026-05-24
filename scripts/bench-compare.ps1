@@ -56,6 +56,7 @@ param(
   [string]$Model = "",
   [string]$OfficialTag = "latest",
   [string]$CustomTag = "latest",
+  [ValidateSet("msvc","clang")][string]$Compiler = "msvc",
   [string]$Pp = "512",
   [string]$Tg = "128",
   [int]$Reps = 5,
@@ -251,8 +252,8 @@ Write-Host "  official ($OFFICIAL_REPO) ..." -ForegroundColor Cyan
 $official = Find-ReleaseAsset -Repo $OFFICIAL_REPO -Tag $OfficialTag -AssetGlob "*cuda-13*-x64.zip"
 Write-Host "    -> $($official.Tag) :: $($official.AssetName) ($([math]::Round($official.AssetSize / 1MB, 1)) MB)" -ForegroundColor Gray
 
-Write-Host "  custom   ($CUSTOM_REPO) ..." -ForegroundColor Cyan
-$custom = Find-ReleaseAsset -Repo $CUSTOM_REPO -Tag $CustomTag -AssetGlob "*win-x64*.zip"
+Write-Host "  custom   ($CUSTOM_REPO, $Compiler) ..." -ForegroundColor Cyan
+$custom = Find-ReleaseAsset -Repo $CUSTOM_REPO -Tag $CustomTag -AssetGlob "*win-x64-$Compiler-*.zip"
 Write-Host "    -> $($custom.Tag) :: $($custom.AssetName) ($([math]::Round($custom.AssetSize / 1MB, 1)) MB)" -ForegroundColor Gray
 
 $officialDir = Join-Path $WorkDir "official-$($official.Tag)"

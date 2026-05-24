@@ -17,31 +17,36 @@ This repo contains **no llama.cpp source code**. It only holds the CI pipeline t
 
 The official `ggml-org/llama.cpp` Windows CUDA release is a portable fat-binary
 targeting a wide range of GPUs and CPUs. This pipeline strips that down and
-re-tunes for one rig:
+re-tunes for one rig, producing **two artifacts per upstream release** -- one
+from MSVC and one from ClangCL -- so the two compilers can be benchmarked
+head-to-head:
 
-| Aspect | Official upstream | This build |
-|---|---|---|
-| CUDA arch | Multi-arch fat binary | `sm_120` only (smaller, no JIT) |
-| CPU dispatch | `GGML_CPU_ALL_VARIANTS=ON` runtime ISA dispatch | Pinned `-march=znver4` + `-mavxvnni` |
-| CPU backend | `GGML_CPU=OFF`, shipped as separate DL backend (`GGML_BACKEND_DL=ON`) | Inline with CUDA build (`BUILD_SHARED_LIBS=ON`) |
-| Host compiler | MSVC `cl.exe` (Ninja Multi-Config) | ClangCL (Ninja) |
-| Optimization | CMake `Release` defaults (`/O2`) | `-O3 -mprefer-vector-width=256 -flto=thin` (ThinLTO) |
-| Exception handling | MSVC default (on) | Explicit `/EHsc` (clang-cl needs it) |
-| AVX-512 | Implicit via runtime variants | **OFF** (`-mno-avx512f`) — workaround for clang-cl `__AVX512BF16__` include bug in `ggml.c` |
-| `GGML_CUDA_NCCL` | Default `ON` | **OFF** (single-GPU rig, kills NCCL link dep) |
-| `GGML_CUDA_FA` | `ON` | `ON` (Flash Attention kernels) |
-| `GGML_CUDA_FA_ALL_QUANTS` | `OFF` | `OFF` (smaller binary; flip ON for max prompt-proc on uncommon quants) |
-| `GGML_CUDA_COMPRESSION_MODE` | unset | `size` (smaller CUDA fatbin) |
-| `LLAMA_BUILD_UI` | `ON` (downloads UI assets from HF Bucket at build time) | **OFF** (no network dep, no UI shipped) |
-| `LLAMA_BUILD_APP` | `ON` (unified `llama` binary) | **OFF** (only legacy `llama-*` binaries) |
-| `LLAMA_BUILD_BORINGSSL` | `ON` | unset (default) |
-| PGO | None | None |
-| Release cadence | Per upstream release | Per upstream release (automated via `upstream-watcher.yml`) |
-| Runner | `windows-2022` (GH-hosted) | `windows-2022` (GH-hosted) |
+| Aspect | Official upstream | This build (MSVC) | This build (ClangCL) |
+|---|---|---|---|
+| Host compiler | MSVC `cl.exe` (Ninja Multi-Config) | MSVC `cl.exe` (Ninja) | ClangCL (Ninja) |
+| CUDA arch | Multi-arch fat binary | `sm_120` only | `sm_120` only |
+| CPU dispatch | `GGML_CPU_ALL_VARIANTS=ON` runtime ISA dispatch | Pinned via `/arch:AVX512` + GGML_AVX_VNNI ON | Pinned `-march=znver4` + `-mavxvnni` |
+| AVX-512 | Implicit via runtime variants | **ON** (F/BW/CD/DQ/VL + VBMI/VNNI/BF16 via GGML cmake flags) | **OFF** -- clang-cl `__AVX512BF16__` include bug ([fork patch](https://github.com/marcusds/llama.cpp/tree/fix/clang-cl-avx512bf16-include)) |
+| Optimization | CMake `Release` defaults (`/O2`) | `/O2 /Ob3 /Oi /Ot /Gy /GL` | `-O3 -mprefer-vector-width=256 -flto=thin` |
+| LTO | None explicit | `/GL` + `/LTCG` | ThinLTO (`-flto=thin`) |
+| Exception handling | MSVC default (on) | MSVC default (on) | Explicit `/EHsc` (clang-cl needs it) |
+| CPU backend | `GGML_CPU=OFF`, shipped as separate DL backend (`GGML_BACKEND_DL=ON`) | Inline (`BUILD_SHARED_LIBS=ON`) | Inline (`BUILD_SHARED_LIBS=ON`) |
+| `GGML_CUDA_NCCL` | Default `ON` | **OFF** (single-GPU rig) | **OFF** (single-GPU rig) |
+| `GGML_CUDA_FA` | `ON` | `ON` | `ON` |
+| `GGML_CUDA_FA_ALL_QUANTS` | `OFF` | `OFF` | `OFF` |
+| `GGML_CUDA_COMPRESSION_MODE` | unset | `size` | `size` |
+| `LLAMA_BUILD_UI` | `ON` (downloads HF UI assets) | **OFF** | **OFF** |
+| `LLAMA_BUILD_APP` | `ON` (unified `llama` binary) | **OFF** | **OFF** |
+| `LLAMA_BUILD_BORINGSSL` | `ON` | unset | unset |
+| PGO | None | None | None |
+| Release tag | `b<NNNN>` | `upstream-<tag>-msvc` | `upstream-<tag>-clang` |
+| Runner | `windows-2022` (GH-hosted) | `windows-2022` (GH-hosted) | `windows-2022` (GH-hosted) |
 
-**Net effect on this rig:** smaller binary, no useless multi-arch CUDA fatbin,
-no NCCL/UI dependencies, tuned-but-portable Zen 5 codegen. AVX-512 win is left
-on the table until the upstream clang-cl fix lands ([marcusds/llama.cpp@fix/clang-cl-avx512bf16-include](https://github.com/marcusds/llama.cpp/tree/fix/clang-cl-avx512bf16-include)).
+**Per-compiler trade-offs:**
+- **MSVC** -- gets full AVX-512 incl. VBMI/VNNI/BF16. Lacks Zen-specific microarch tuning (only `/arch:AVX512`, no `-march=znver4` equivalent).
+- **ClangCL** -- gets precise `-march=znver4` instruction selection and ThinLTO. AVX-512 is currently disabled at the compiler level to work around an upstream `_MSC_VER`-branch include bug in `ggml/src/ggml.c` (fix pending on the fork branch above).
+
+The watcher in `upstream-watcher.yml` triggers a new run when **either** marker is missing.
 
 ---
 

@@ -40,12 +40,20 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${{ steps.upstream.outputs.tag }}"
-          marker="upstream-$tag"
-          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$marker" >/dev/null 2>&1; then
-            echo "Already built ($marker exists). Nothing to do."
+          have_msvc=false
+          have_clang=false
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/upstream-$tag-msvc" >/dev/null 2>&1; then
+            have_msvc=true
+          fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/upstream-$tag-clang" >/dev/null 2>&1; then
+            have_clang=true
+          fi
+          echo "msvc marker: $have_msvc, clang marker: $have_clang"
+          if [ "$have_msvc" = "true" ] && [ "$have_clang" = "true" ]; then
+            echo "Both compilers already built upstream $tag. Nothing to do."
             echo "built=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Not yet built. Will trigger build.yml with llama_ref=$tag."
+            echo "Missing one or both compiler builds. Dispatching build.yml."
             echo "built=false" >> "$GITHUB_OUTPUT"
           fi
 
