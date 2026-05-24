@@ -33,6 +33,7 @@ head-to-head:
 | CPU backend | `GGML_CPU=OFF`, shipped as separate DL backend (`GGML_BACKEND_DL=ON`) | Inline (`BUILD_SHARED_LIBS=ON`) | Inline (`BUILD_SHARED_LIBS=ON`) |
 | `GGML_CUDA_NCCL` | Default `ON` | **OFF** (single-GPU rig) | **OFF** (single-GPU rig) |
 | `GGML_CUDA_FA` | `ON` | `ON` | `ON` |
+| `GGML_CUDA_FORCE_MMQ` | `OFF` | **`ON`** (forces MMQ over cuBLAS for Q-quants) | **`ON`** |
 | `GGML_CUDA_FA_ALL_QUANTS` | `OFF` | `OFF` | `OFF` |
 | `GGML_CUDA_COMPRESSION_MODE` | unset | `size` | `size` |
 | `LLAMA_BUILD_UI` | `ON` (downloads HF UI assets) | **OFF** | **OFF** |
