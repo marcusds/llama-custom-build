@@ -151,13 +151,10 @@ jobs:
             -DGGML_NATIVE=OFF `
             -DLLAMA_CPU_AOT_ALWAYS_LOAD=OFF -DLLAMA_BUILD_UI=OFF -DLLAMA_BUILD_APP=OFF `
             -DBUILD_SHARED_LIBS=ON `
-            -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON `
             "-DCMAKE_C_FLAGS_RELEASE=/MD /O2 /Ob3 /DNDEBUG" `
             "-DCMAKE_CXX_FLAGS_RELEASE=/MD /O2 /Ob3 /DNDEBUG" `
-            "-DCMAKE_C_FLAGS=/arch:AVX512 /Oi /Ot /Gy /GL /fp:precise" `
-            "-DCMAKE_CXX_FLAGS=/arch:AVX512 /Oi /Ot /Gy /GL /fp:precise /EHsc" `
-            "-DCMAKE_EXE_LINKER_FLAGS=/LTCG" `
-            "-DCMAKE_SHARED_LINKER_FLAGS=/LTCG"
+            "-DCMAKE_C_FLAGS=/arch:AVX512 /Oi /Ot /Gy /fp:precise" `
+            "-DCMAKE_CXX_FLAGS=/arch:AVX512 /Oi /Ot /Gy /fp:precise /EHsc"
 
       - name: Configure (ClangCL)
         if: matrix.compiler == 'clang'
