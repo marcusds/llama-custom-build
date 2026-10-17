@@ -8,6 +8,7 @@ Automated build pipeline for [llama.cpp](https://github.com/ggml-org/llama.cpp),
 | CPU | Zen 5 (Ryzen 9800X3D) — AVX2 / FMA / AVX-VNNI (256-bit) |
 | OS | Windows 11 x64                              |
 | CUDA | 13.2.1                                      |
+| Mac | Apple M4 MacBook Pro (4P+6E cores, 10-core GPU, 24 GB) — macOS, Metal |
 
 This repo contains **no llama.cpp source code**. It only holds the CI pipeline that clones upstream at build time.
 
@@ -180,6 +181,44 @@ drop a target from the run. At least two targets are required.
 Builds are cached under `bench-work/`; pass `-Refresh` to re-download. Each
 run writes `bench-work/compare-<timestamp>.json` with the full llama-bench
 output from every target plus the comparison rows.
+
+---
+
+## macOS (Apple M4)
+
+A third job, `build-macos-metal`, builds `*-macos-arm64-*.zip` on a GitHub
+`macos-15` runner, tuned for the M4 MacBook Pro rather than the runner:
+
+| Aspect | Official upstream macOS | This build |
+|---|---|---|
+| CPU target | `-mcpu=native` of the release runner | `-mcpu=apple-m4` pinned (dotprod, i8mm, fp16, bf16, SME2; no SVE), `GGML_NATIVE=OFF` |
+| GPU | Metal | Metal, shaders embedded in the binary |
+| `GGML_CPU_KLEIDIAI` | `OFF` | **`ON`** (SME2 microkernels for ops left on the CPU) |
+| Linking | shared `libggml*.dylib` + `libllama.dylib` | **static**, one self-contained binary per tool |
+| TLS | system/Homebrew OpenSSL | **BoringSSL, static** (no `/opt/homebrew` dependency) |
+| `LLAMA_BUILD_NUMBER` | from full clone | recovered from the `bNNNN` tag (shallow clone would say build 1) |
+
+The runner is an older M-series chip, so the binaries are not executed in CI
+(SME instructions would fault there); the job instead fails if any binary links
+a dylib outside `/System/Library` or `/usr/lib`. Requires Apple clang 17+, so
+the job selects the newest Xcode on the image.
+
+Running it on the M4:
+
+```sh
+gh release download upstream-bNNNN -R marcusds/llama-custom-build -p '*-macos-arm64-*.zip'
+unzip llama-cpp-m4-macos-arm64-*.zip -d llama-m4
+xattr -dr com.apple.quarantine llama-m4   # only needed if downloaded via a browser
+
+# Metal lets the GPU wire ~75% of RAM by default (18186 MiB on 24 GB).
+# Raise it until next reboot if weights + KV cache don't fit:
+sudo sysctl iogpu.wired_limit_mb=20480
+
+# -t 4: P-cores only; E-cores just make each token wait on the slowest thread.
+./llama-m4/llama-server -m model.gguf -ngl 999 -fa on -t 4 -c 32768
+```
+
+`scripts/bench-compare.ps1` is Windows-only and does not cover this artifact.
 
 ---
 

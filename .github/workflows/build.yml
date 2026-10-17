@@ -250,7 +250,7 @@ jobs:
           $isUpstreamTag = ($ref -ne "master" -and $ref -ne "" -and $event -eq "workflow_dispatch")
           if ($isUpstreamTag) {
             "tag=upstream-$ref" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            "name=llama.cpp upstream $ref (sm_120 + Zen 5)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "name=llama.cpp upstream $ref (sm_120 + Zen 5, Apple M4)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
             "make_release=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           } else {
             "make_release=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
@@ -266,13 +266,172 @@ jobs:
             Automated build of [llama.cpp](${{ env.LLAMA_REPO }}) @ `${{ steps.upstream.outputs.sha }}`
             Upstream ref: `${{ steps.resolve.outputs.ref }}`
 
-            **Target hardware:** RTX 5000 / 5090 (sm_120) + Zen 5
+            **Target hardware:** RTX 5000 / 5090 (sm_120) + Zen 5; Apple M4 (Metal)
             **CUDA:** 13.2.1
             **Flash Attention:** Enabled
 
-            Two artifacts per release, one per host compiler:
-            - `*-msvc-*.zip` -- MSVC w/ AVX-512 (F/BW/CD/DQ/VL + VBMI/VNNI)
-            - `*-clang-*.zip` -- ClangCL w/ `-march=znver4` + ThinLTO
+            Three artifacts per release:
+            - `*-msvc-*.zip` -- Windows, MSVC w/ AVX-512 (F/BW/CD/DQ/VL + VBMI/VNNI)
+            - `*-clang-*.zip` -- Windows, ClangCL w/ `-march=znver4` + ThinLTO
+            - `*-macos-arm64-*.zip` -- macOS, Metal + `-mcpu=apple-m4` (SME2, KleidiAI), static
+          files: artifacts/*.zip
+          draft: false
+          prerelease: false
+          append_body: false
+
+  # Apple M4 (MacBook Pro Mac16,1: 4P+6E cores, 10-core GPU, 24 GB). GitHub's
+  # arm64 macOS runners are an older M-series chip, so GGML_NATIVE would tune
+  # for the runner; the CPU target is pinned to -mcpu=apple-m4 instead. That
+  # enables the same features GGML_NATIVE finds on the M4 itself (dotprod,
+  # i8mm, fp16, bf16, SME/SME2, no non-streaming SVE). The binaries are
+  # therefore never run here: SME instructions would SIGILL on the runner.
+  build-macos-metal:
+    name: macOS Metal Apple M4
+    runs-on: macos-15
+
+    concurrency:
+      group: ${{ github.event_name == 'workflow_dispatch' && format('build-dispatch-{0}-macos', github.event.inputs.llama_ref) || format('build-{0}-macos', github.ref) }}
+      cancel-in-progress: ${{ github.event_name == 'push' }}
+
+    env:
+      MAC_ARTIFACT_NAME: llama-cpp-m4-macos-arm64
+
+    steps:
+      - name: Checkout build-pipeline repo
+        uses: actions/checkout@v6.0.2
+
+      - name: Resolve llama.cpp ref
+        id: resolve
+        env:
+          INPUT_REF: ${{ github.event.inputs.llama_ref }}
+        run: |
+          ref="${INPUT_REF:-master}"
+          echo "Building ref: $ref"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Clone llama.cpp @ ${{ steps.resolve.outputs.ref }}
+        run: |
+          git clone --depth 1 --branch "${{ steps.resolve.outputs.ref }}" \
+            "$LLAMA_REPO" "$BUILD_DIR"
+
+      - name: Record upstream commit
+        id: upstream
+        run: |
+          sha=$(git -C "$BUILD_DIR" rev-parse HEAD)
+          echo "Upstream SHA: $sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "short=${sha:0:10}" >> "$GITHUB_OUTPUT"
+
+      # -mcpu=apple-m4 needs Apple clang 17+ (LLVM 19). Use the newest Xcode
+      # on the image and fail here, not halfway through the build, if not.
+      - name: Select newest Xcode
+        run: |
+          xcode=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          sudo xcode-select -s "$xcode"
+          clang --version | head -1
+          echo 'int main(void){return 0;}' | clang -mcpu=apple-m4 -x c -c -o /dev/null -
+          brew list ninja >/dev/null 2>&1 || brew install ninja
+
+      # GGML_CPU_KLEIDIAI   Arm SME2 microkernels for whatever stays on the CPU.
+      # BUILD_SHARED_LIBS   OFF: one self-contained binary per tool. macOS has a
+      #                     single GPU backend, so BACKEND_DL buys nothing.
+      # LLAMA_BUILD_BORINGSSL  static TLS; otherwise llama-server links the
+      #                     runner's Homebrew libssl.dylib and won't start on a
+      #                     Mac without that exact version.
+      # GGML_OPENMP         OFF: Apple clang has no libomp; ggml's threadpool runs.
+      # LLAMA_BUILD_NUMBER  --depth 1 clones report build 1; recover it from bNNNN.
+      - name: Configure
+        env:
+          REF: ${{ steps.resolve.outputs.ref }}
+        run: |
+          num=$(printf '%s' "$REF" | sed -n 's/^b\([0-9]\{1,\}\)$/\1/p')
+          build_num=()
+          [ -n "$num" ] && build_num=(-DLLAMA_BUILD_NUMBER="$num")
+          cmake -S "$BUILD_DIR" -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_NATIVE=OFF \
+            "-DCMAKE_C_FLAGS=-mcpu=apple-m4" \
+            "-DCMAKE_CXX_FLAGS=-mcpu=apple-m4" \
+            -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DGGML_CPU_KLEIDIAI=ON \
+            -DGGML_OPENMP=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DLLAMA_BUILD_BORINGSSL=ON \
+            -DLLAMA_BUILD_UI=OFF -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_TESTS=OFF \
+            -DGGML_CCACHE=OFF \
+            "${build_num[@]}"
+
+      - name: Build (Release)
+        run: cmake --build build --parallel "$(sysctl -n hw.ncpu)"
+
+      - name: Collect artifacts
+        run: |
+          out="artifacts/$MAC_ARTIFACT_NAME"
+          mkdir -p "$out"
+          find build/bin -maxdepth 1 -type f -name 'llama-*' -perm -u+x -exec cp {} "$out" \;
+          # Static build: anything outside the OS (e.g. /opt/homebrew) is a bug.
+          bad=$(for f in "$out"/*; do otool -L "$f" | tail -n +2; done |
+                awk '{print $1}' | grep -vE '^(/System/Library/|/usr/lib/)' | sort -u || true)
+          if [ -n "$bad" ]; then echo "Non-system dylib dependencies:"; echo "$bad"; exit 1; fi
+          jq -n \
+            --arg repo "$LLAMA_REPO" \
+            --arg ref "${{ steps.resolve.outputs.ref }}" \
+            --arg sha "${{ steps.upstream.outputs.sha }}" \
+            --arg date "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" \
+            --arg compiler "$(clang --version | head -1)" \
+            '{upstream_repo: $repo, upstream_ref: $ref, upstream_sha: $sha, build_date: $date,
+              gpu: "Metal (embedded library)", cpu_target: "-mcpu=apple-m4 (dotprod, i8mm, fp16, bf16, SME2)",
+              kleidiai: "ON", linkage: "static, BoringSSL", compiler: $compiler, flash_attention: "ON"}' \
+            > "$out/build-info.json"
+          ls -l "$out"
+
+      - name: Package release zip
+        run: |
+          zip_name="$MAC_ARTIFACT_NAME-${{ steps.upstream.outputs.short }}.zip"
+          (cd "artifacts/$MAC_ARTIFACT_NAME" && zip -qr "../$zip_name" .)
+          ls -lh "artifacts/$zip_name"
+
+      - name: Upload artifacts
+        if: ${{ github.event.inputs.upload_artifacts != 'false' }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: ${{ env.MAC_ARTIFACT_NAME }}-${{ steps.upstream.outputs.short }}
+          path: artifacts/${{ env.MAC_ARTIFACT_NAME }}-${{ steps.upstream.outputs.short }}.zip
+          retention-days: 30
+
+      - name: Decide release metadata
+        id: rel
+        env:
+          REF: ${{ steps.resolve.outputs.ref }}
+        run: |
+          if [ "$REF" != master ] && [ -n "$REF" ] && [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            echo "tag=upstream-$REF" >> "$GITHUB_OUTPUT"
+            echo "name=llama.cpp upstream $REF (sm_120 + Zen 5, Apple M4)" >> "$GITHUB_OUTPUT"
+            echo "make_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "make_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Same name/body as the Windows job: all three jobs write to one release
+      # and whichever finishes last sets the text.
+      - name: Create Release
+        if: steps.rel.outputs.make_release == 'true'
+        uses: softprops/action-gh-release@v3.0.0
+        with:
+          tag_name: ${{ steps.rel.outputs.tag }}
+          name: ${{ steps.rel.outputs.name }}
+          body: |
+            Automated build of [llama.cpp](${{ env.LLAMA_REPO }}) @ `${{ steps.upstream.outputs.sha }}`
+            Upstream ref: `${{ steps.resolve.outputs.ref }}`
+
+            **Target hardware:** RTX 5000 / 5090 (sm_120) + Zen 5; Apple M4 (Metal)
+            **CUDA:** 13.2.1
+            **Flash Attention:** Enabled
+
+            Three artifacts per release:
+            - `*-msvc-*.zip` -- Windows, MSVC w/ AVX-512 (F/BW/CD/DQ/VL + VBMI/VNNI)
+            - `*-clang-*.zip` -- Windows, ClangCL w/ `-march=znver4` + ThinLTO
+            - `*-macos-arm64-*.zip` -- macOS, Metal + `-mcpu=apple-m4` (SME2, KleidiAI), static
           files: artifacts/*.zip
           draft: false
           prerelease: false

@@ -46,14 +46,16 @@ jobs:
           echo "$assets"
           have_msvc=false
           have_clang=false
+          have_mac=false
           if echo "$assets" | grep -q -- "-msvc-.*\.zip"; then have_msvc=true; fi
           if echo "$assets" | grep -q -- "-clang-.*\.zip"; then have_clang=true; fi
-          echo "msvc asset present: $have_msvc, clang asset present: $have_clang"
-          if [ "$have_msvc" = "true" ] && [ "$have_clang" = "true" ]; then
-            echo "Both compiler zips already in $marker. Nothing to do."
+          if echo "$assets" | grep -q -- "-macos-arm64-.*\.zip"; then have_mac=true; fi
+          echo "msvc: $have_msvc, clang: $have_clang, macos: $have_mac"
+          if [ "$have_msvc" = "true" ] && [ "$have_clang" = "true" ] && [ "$have_mac" = "true" ]; then
+            echo "All three zips already in $marker. Nothing to do."
             echo "built=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Release missing one or both compiler zips. Dispatching build.yml."
+            echo "Release missing one or more zips. Dispatching build.yml."
             echo "built=false" >> "$GITHUB_OUTPUT"
           fi
 
