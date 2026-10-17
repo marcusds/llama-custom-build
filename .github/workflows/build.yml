@@ -273,7 +273,7 @@ jobs:
             Three artifacts per release:
             - `*-msvc-*.zip` -- Windows, MSVC w/ AVX-512 (F/BW/CD/DQ/VL + VBMI/VNNI)
             - `*-clang-*.zip` -- Windows, ClangCL w/ `-march=znver4` + ThinLTO
-            - `*-macos-arm64-*.zip` -- macOS, Metal + `-mcpu=apple-m4` (SME2, KleidiAI), static
+            - `*-macos-arm64-*.zip` -- macOS, Metal + `-mcpu=apple-m4` (SME2, KleidiAI)
           files: artifacts/*.zip
           draft: false
           prerelease: false
@@ -333,11 +333,15 @@ jobs:
           brew list ninja >/dev/null 2>&1 || brew install ninja
 
       # GGML_CPU_KLEIDIAI   Arm SME2 microkernels for whatever stays on the CPU.
-      # BUILD_SHARED_LIBS   OFF: one self-contained binary per tool. macOS has a
-      #                     single GPU backend, so BACKEND_DL buys nothing.
-      # LLAMA_BUILD_BORINGSSL  static TLS; otherwise llama-server links the
-      #                     runner's Homebrew libssl.dylib and won't start on a
-      #                     Mac without that exact version.
+      # BUILD_SHARED_LIBS   ON: the tools share one libggml*/libllama instead of
+      #                     each embedding ggml + the Metal shaders (static was
+      #                     647 MB unzipped, shared is 32 MB). INSTALL_RPATH
+      #                     @loader_path makes the binaries find the dylibs next
+      #                     to them wherever the zip is unpacked; the default
+      #                     build rpath is the runner's absolute build dir.
+      # LLAMA_BUILD_BORINGSSL  TLS linked in statically; otherwise llama-server
+      #                     links the runner's Homebrew libssl.dylib and won't
+      #                     start on a Mac without that exact version.
       # GGML_OPENMP         OFF: Apple clang has no libomp; ggml's threadpool runs.
       # LLAMA_BUILD_NUMBER  --depth 1 clones report build 1; recover it from bNNNN.
       - name: Configure
@@ -355,7 +359,8 @@ jobs:
             -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON \
             -DGGML_CPU_KLEIDIAI=ON \
             -DGGML_OPENMP=OFF \
-            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_INSTALL_RPATH=@loader_path -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DLLAMA_BUILD_BORINGSSL=ON \
             -DLLAMA_BUILD_UI=OFF -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_TESTS=OFF \
             -DGGML_CCACHE=OFF \
@@ -369,10 +374,20 @@ jobs:
           out="artifacts/$MAC_ARTIFACT_NAME"
           mkdir -p "$out"
           find build/bin -maxdepth 1 -type f -name 'llama-*' -perm -u+x -exec cp {} "$out" \;
-          # Static build: anything outside the OS (e.g. /opt/homebrew) is a bug.
-          bad=$(for f in "$out"/*; do otool -L "$f" | tail -n +2; done |
-                awk '{print $1}' | grep -vE '^(/System/Library/|/usr/lib/)' | sort -u || true)
-          if [ -n "$bad" ]; then echo "Non-system dylib dependencies:"; echo "$bad"; exit 1; fi
+          cp -P build/bin/*.dylib "$out"
+          # Every dependency must be the OS or an @rpath dylib shipped in the zip;
+          # anything else (e.g. /opt/homebrew, the build dir) breaks on another Mac.
+          bad=$(for f in "$out"/*; do
+                  [ -L "$f" ] && continue
+                  otool -L "$f" | tail -n +2 | awk '{print $1}' | while read -r d; do
+                    case "$d" in
+                      /System/Library/*|/usr/lib/*) ;;
+                      @rpath/*) [ -e "$out/${d#@rpath/}" ] || echo "$(basename "$f"): missing $d" ;;
+                      *) echo "$(basename "$f"): $d" ;;
+                    esac
+                  done
+                done | sort -u)
+          if [ -n "$bad" ]; then echo "Unresolvable dylib dependencies:"; echo "$bad"; exit 1; fi
           jq -n \
             --arg repo "$LLAMA_REPO" \
             --arg ref "${{ steps.resolve.outputs.ref }}" \
@@ -381,14 +396,15 @@ jobs:
             --arg compiler "$(clang --version | head -1)" \
             '{upstream_repo: $repo, upstream_ref: $ref, upstream_sha: $sha, build_date: $date,
               gpu: "Metal (embedded library)", cpu_target: "-mcpu=apple-m4 (dotprod, i8mm, fp16, bf16, SME2)",
-              kleidiai: "ON", linkage: "static, BoringSSL", compiler: $compiler, flash_attention: "ON"}' \
+              kleidiai: "ON", linkage: "shared (@loader_path), static BoringSSL", compiler: $compiler, flash_attention: "ON"}' \
             > "$out/build-info.json"
           ls -l "$out"
 
       - name: Package release zip
         run: |
           zip_name="$MAC_ARTIFACT_NAME-${{ steps.upstream.outputs.short }}.zip"
-          (cd "artifacts/$MAC_ARTIFACT_NAME" && zip -qr "../$zip_name" .)
+          # -y keeps the libfoo.dylib -> libfoo.0.dylib symlinks as symlinks.
+          (cd "artifacts/$MAC_ARTIFACT_NAME" && zip -qry "../$zip_name" .)
           ls -lh "artifacts/$zip_name"
 
       - name: Upload artifacts
@@ -431,7 +447,7 @@ jobs:
             Three artifacts per release:
             - `*-msvc-*.zip` -- Windows, MSVC w/ AVX-512 (F/BW/CD/DQ/VL + VBMI/VNNI)
             - `*-clang-*.zip` -- Windows, ClangCL w/ `-march=znver4` + ThinLTO
-            - `*-macos-arm64-*.zip` -- macOS, Metal + `-mcpu=apple-m4` (SME2, KleidiAI), static
+            - `*-macos-arm64-*.zip` -- macOS, Metal + `-mcpu=apple-m4` (SME2, KleidiAI)
           files: artifacts/*.zip
           draft: false
           prerelease: false

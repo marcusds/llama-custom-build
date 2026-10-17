@@ -194,13 +194,14 @@ A third job, `build-macos-metal`, builds `*-macos-arm64-*.zip` on a GitHub
 | CPU target | `-mcpu=native` of the release runner | `-mcpu=apple-m4` pinned (dotprod, i8mm, fp16, bf16, SME2; no SVE), `GGML_NATIVE=OFF` |
 | GPU | Metal | Metal, shaders embedded in the binary |
 | `GGML_CPU_KLEIDIAI` | `OFF` | **`ON`** (SME2 microkernels for ops left on the CPU) |
-| Linking | shared `libggml*.dylib` + `libllama.dylib` | **static**, one self-contained binary per tool |
-| TLS | system/Homebrew OpenSSL | **BoringSSL, static** (no `/opt/homebrew` dependency) |
+| Linking | shared `libggml*.dylib` + `libllama.dylib` | shared, `@loader_path` rpath (unzip anywhere) |
+| TLS | system/Homebrew OpenSSL | **BoringSSL, linked in** (no `/opt/homebrew` dependency) |
 | `LLAMA_BUILD_NUMBER` | from full clone | recovered from the `bNNNN` tag (shallow clone would say build 1) |
 
 The runner is an older M-series chip, so the binaries are not executed in CI
-(SME instructions would fault there); the job instead fails if any binary links
-a dylib outside `/System/Library` or `/usr/lib`. Requires Apple clang 17+, so
+(SME instructions would fault there); the job instead fails if any binary needs
+a dylib that is neither part of macOS nor shipped in the zip. Requires Apple
+clang 17+, so
 the job selects the newest Xcode on the image.
 
 Running it on the M4:
